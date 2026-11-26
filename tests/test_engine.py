@@ -6,7 +6,19 @@ import unittest
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from requirements_validator.engine import GLOBAL, LOCAL, review
+from requirements_validator.engine import AUDIT, GLOBAL, LOCAL, PATCH, review
+
+
+def agreed_audit():
+    """Фиксированный ответ независимого рецензента для ТЗ про бронирование."""
+    return {
+        "decisions": [{"id": "Z-001", "action": "оставить", "basis": "Прямое обязательство",
+                       "severity": "Критичная", "reason": "Цена отмены за сутки имеет два исхода.",
+                       "blocking": True, "supports": [], "question_mode": "сохранить", "question": "", "test": ""}],
+        "assessment": "Правила отмены устанавливают разные суммы.",
+        "readiness": "Проверка суммы при отмене требует решения владельца.",
+        "priorities": [{"ids": ["Z-001"], "step": "Уточнить плату за отмену."}],
+    }
 
 
 @dataclass
@@ -19,13 +31,15 @@ class Block:
 
 
 class Responses:
-    def __init__(self, *answers):
+    def __init__(self, *answers, audits=None):
         self.answers = iter(answers)
+        self.audits = iter([agreed_audit()] if audits is None else audits)
         self.calls = []
 
     def ask(self, prompt, schema):
+        auditing = schema is AUDIT or (schema is PATCH and self.calls[-1][1] is AUDIT)
         self.calls.append((prompt, schema))
-        return copy.deepcopy(next(self.answers))
+        return copy.deepcopy(next(self.audits if auditing else self.answers))
 
 
 class TestReview(unittest.TestCase):
@@ -85,7 +99,7 @@ class TestReview(unittest.TestCase):
         self.assertTrue(result["questions"][0]["blocking"])
         self.assertIn("отмене", result["set_review"]["readiness"].lower())
         self.assertNotIn("карта", json.dumps(result, ensure_ascii=False).lower())
-        self.assertEqual([schema for _, schema in provider.calls], [LOCAL, GLOBAL])
+        self.assertEqual([schema for _, schema in provider.calls], [LOCAL, GLOBAL, AUDIT])
         self.assertIn(self.blocks[-1].text, provider.calls[-1][0])
 
     def test_missing_block_retried_alone_with_read_only_neighbours(self):
@@ -93,7 +107,7 @@ class TestReview(unittest.TestCase):
         repaired = {"claims": [], "context": self.local["context"]}
         provider = Responses(bad, repaired, self.whole)
         result = review(self.document, provider)
-        self.assertEqual(len(provider.calls), 3)
+        self.assertEqual(len(provider.calls), 4)
         payload = json.loads(provider.calls[1][0].split("Вход (JSON):\n", 1)[1])
         self.assertEqual([b["id"] for b in payload["blocks"]], ["M03"])
         self.assertEqual([b["id"] for b in payload["context_only"]], ["M02"])
@@ -156,6 +170,56 @@ class TestReview(unittest.TestCase):
         claim = review(self.document, Responses(self.local, self.whole))["requirements"][1]
         self.assertEqual(claim["assessment"], "Вместимость прямо указана.")
 
+    def test_global_correction_only_appends_missing_resolution(self):
+        self.local["claims"][0]["status"] = "проверить"
+        correction = {"changes": [{"op": "append", "path": "/resolved/-",
+                                   "value": json.dumps({"id": "R-M01-02", "reason": "Указано число мест."})}]}
+        log = []
+        provider = Responses(self.local, self.whole, correction)
+        result = review(self.document, provider, log.append)
+        self.assertEqual([schema for _, schema in provider.calls], [LOCAL, GLOBAL, PATCH, AUDIT])
+        self.assertTrue(any("Нет результата" in line and "R-M01-02" in line for line in log))
+        self.assertEqual(result["requirements"][1]["assessment"], "Указано число мест.")
+        self.assertEqual(result["counts"]["defects"], 1)
+
+    def test_same_rule_can_have_resolved_and_independent_finding(self):
+        self.whole["resolved"] = [{"id": "R-M01-01", "reason": "Срок отмены прямо указан."}]
+        result = review(self.document, Responses(self.local, self.whole))
+        claim = result["requirements"][0]
+        self.assertEqual(claim["findings"], ["Z-001"])
+        self.assertIn("Срок отмены прямо указан.", claim["assessment"])
+        self.assertEqual(claim["status"], "Выявлено нарушение")
+
+    def test_patch_cannot_overwrite_good_results(self):
+        self.local["claims"][0]["status"] = "проверить"
+        for path in ("/readiness", "/findings", "/findings/0/topic", "/resolved/../findings"):
+            with self.subTest(path=path):
+                patch = {"changes": [{"op": "replace", "path": path, "value": "Посторонняя замена"}]}
+                with self.assertRaisesRegex(ValueError, "вне разрешённой области"):
+                    review(self.document, Responses(self.local, self.whole, patch))
+
+    def test_valid_patch_must_pass_complete_revalidation(self):
+        self.local["claims"][0]["status"] = "проверить"
+        patch = {"changes": [{"op": "append", "path": "/resolved/-",
+                              "value": json.dumps({"id": "R-fake", "reason": "не подтверждено"})}]}
+        with self.assertRaisesRegex(ValueError, "Проверьте|Повторный ответ"):
+            review(self.document, Responses(self.local, self.whole, patch))
+
+    def test_audit_can_replace_one_scalar_and_remove_two_original_duplicates(self):
+        audit = agreed_audit()
+        good = audit["decisions"][0]
+        # Правка первого вердикта плюс удаление обоих дублей по исходным индексам.
+        audit["decisions"] = [dict(good, reason=""), good, good]
+        changes = {"changes": [
+            {"op": "replace", "path": "/decisions/0/reason", "value": good["reason"]},
+            {"op": "remove", "path": "/decisions/1", "value": ""},
+            {"op": "remove", "path": "/decisions/2", "value": ""},
+        ]}
+        provider = Responses(self.local, self.whole, audits=[audit, changes])
+        result = review(self.document, provider)
+        self.assertEqual(result["counts"]["defects"], 1)
+        self.assertIs(provider.calls[-1][1], PATCH)
+
     def test_two_supported_readings_are_counted(self):
         self.issue.update(kind="Неоднозначность", category="Однозначность",
                           interpretations=[dict(self.issue["evidence"][0],
@@ -177,6 +241,55 @@ class TestReview(unittest.TestCase):
         self.assertEqual(result["counts"]["gaps"], 1)
         self.assertEqual(result["requirements"][0]["status"], "Недостаточно данных")
 
+    def test_retracted_candidate_leaves_no_issue_or_question(self):
+        audit = agreed_audit()
+        audit["decisions"][0].update(action="снять", basis="Вне требований", blocking=False,
+                                     reason="Приведённый сценарий не входит в правила открытия зала.",
+                                     question_mode="убрать")
+        audit.update(assessment="Требования к открытию зала проверяемы.", readiness="Можно тестировать.",
+                     priorities=[])
+        result = review(self.document, Responses(self.local, self.whole, audits=[audit]))
+        self.assertEqual(result["counts"]["defects"], 0)
+        self.assertFalse(result["questions"])
+        self.assertFalse(result["findings"])
+        self.assertFalse(result["set_review"]["priorities"])
+        self.assertEqual(result["requirements"][0]["assessment"], audit["decisions"][0]["reason"])
+        self.assertEqual(result["requirements"][0]["status"], "Нарушений не выявлено")
+
+    def test_question_downgrade_keeps_only_verified_source(self):
+        audit = agreed_audit()
+        audit["decisions"][0].update(action="уточнить", basis="Обоснованное ожидание", blocking=False,
+                                     severity="Низкая", reason="Размер суммы упоминается для одного условия.",
+                                     supports=["R-M02-01"], question_mode="заменить",
+                                     question="К какому условию относится удержание?", test="Отмена зала за сутки.")
+        result = review(self.document, Responses(self.local, self.whole, audits=[audit]))
+        [f] = result["findings"]
+        self.assertEqual(result["counts"]["defects"], 0)
+        self.assertEqual(result["counts"]["gaps"], 1)
+        self.assertEqual(f["ids"], ["R-M02-01"])
+        self.assertEqual([a["quote"] for a in f["evidence"]], [self.third])
+        self.assertFalse(f["interpretations"])
+        self.assertEqual(result["questions"][0]["test"], "Отмена зала за сутки.")
+        self.assertFalse(result["questions"][0]["blocking"])
+        self.assertEqual(result["requirements"][0]["findings"], [])
+
+    def test_audit_rejects_missing_duplicate_or_speculative_verdicts(self):
+        baseline = agreed_audit()
+        row = baseline["decisions"][0]
+        for decisions in ([], [row, row], [dict(row, id="Z-002")],
+                          [dict(row, basis="Обоснованное ожидание")],
+                          [dict(row, action="уточнить", supports=["R-M01-02"])]):
+            with self.subTest(decisions=decisions):
+                bad = dict(baseline, decisions=decisions)
+                with self.assertRaisesRegex(ValueError, "Повторный ответ"):
+                    review(self.document, Responses(self.local, self.whole, audits=[bad, bad]))
+
+    def test_withdrawn_id_rejected_in_final_priorities(self):
+        audit = agreed_audit()
+        audit["decisions"][0].update(action="снять", question_mode="убрать", blocking=False)
+        with self.assertRaisesRegex(ValueError, "снятое"):
+            review(self.document, Responses(self.local, self.whole, audits=[audit, audit]))
+
     def test_schema_and_invalid_quote_rejected(self):
         bad = copy.deepcopy(self.local)
         bad["claims"][0]["quote"] = "Другое требование"
@@ -195,7 +308,7 @@ class TestReview(unittest.TestCase):
         payload = json.loads(provider.calls[-1][0].split("Вход (JSON):\n", 1)[1])
         self.assertEqual(len(payload["blocks"]), 3)
         self.assertEqual(len(payload["claims"]), 3)
-        self.assertEqual(len(provider.calls), 3)
+        self.assertEqual(len(provider.calls), 4)
 
 
 if __name__ == "__main__":
