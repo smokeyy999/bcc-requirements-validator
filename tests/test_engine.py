@@ -117,6 +117,22 @@ class TestReview(unittest.TestCase):
         self.assertEqual([schema for _, schema in provider.calls], [LOCAL, GLOBAL, AUDIT])
         self.assertIn(self.blocks[-1].text, provider.calls[-1][0])
 
+    def test_matching_topic_anchors_and_scenario_retain_an_independent_outcome_for_review(self):
+        duplicate = copy.deepcopy(self.issue)
+        independent = copy.deepcopy(self.issue)
+        independent.update(consequence="Нельзя определить доступность освободившегося зала.",
+                           question="Когда зал снова доступен?", test="Проверить доступность после отмены.")
+        duplicate["evidence"].append({"id": "R-M01-02", "quote": self.second})
+        self.whole["findings"].extend([duplicate, independent])
+        audit = agreed_audit()
+        audit["decisions"].append(dict(audit["decisions"][0], id="Z-002"))
+        result = review(self.document, Responses(self.local, self.whole, audits=[audit]))
+        self.assertEqual(result["counts"]["questions"], 2)
+        self.assertEqual(result["counts"]["defects"], 2)
+        first = next(f for f in result["findings"] if f["question"] == self.issue["question"])
+        self.assertEqual(set(first["ids"]), {"R-M01-01", "R-M01-02", "R-M02-01"})
+        self.assertIn(independent["question"], [q["question"] for q in result["questions"]])
+
     def test_repair_rejected_applicability_object_or_only_its_array(self):
         valid_case = agreed_audit()["decisions"][0]["case_check"]
         for field, corrected in (("case_check", valid_case), ("case_check/anchors", valid_case["anchors"])):

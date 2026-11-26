@@ -80,6 +80,25 @@ class QuestionCategoryTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "same_decision_as"):
                 _final_decisions(audit, [self.item, second, third], self.claims)
 
+    def test_dismissed_duplicate_keeps_the_additional_citation_on_the_surviving_card(self):
+        duplicate = dict(self.item, id="Z-002", ids=[self.coverage["id"]], evidence=[self.coverage])
+        removed = dict(self.decision, id=duplicate["id"], action="снять", question_mode="убрать",
+                       same_decision_as=self.item["id"], question_check=[])
+        audit = dict(decisions=[self.decision, removed],
+                     priorities=[dict(ids=[self.item["id"]], step="Согласовать испытания.")],
+                     assessment="Одна незакрытая проверка.", readiness="Нужно определить цвета.")
+        findings, _, _ = _final_decisions(audit, [self.item, duplicate], self.claims)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["ids"], [self.rule["id"], self.coverage["id"]])
+        self.assertEqual(findings[0]["evidence"], self.claims)
+
+    def test_corrected_test_replaces_the_original_wrong_scenario(self):
+        self.item["scenario"] = "Проверить длительность одного заполнения."
+        corrected = "Сложить длительности всех заполнений за смену и сравнить итог со сроком."
+        reviewed = self.reviewed(question_mode="заменить", question=self.item["question"], test=corrected)
+        self.assertEqual(reviewed["scenario"], corrected)
+        self.assertEqual(reviewed["test"], corrected)
+
     def test_review_keeps_the_quality_category_when_the_question_has_the_same_basis(self):
         examples = {
             "Проверяемость": ("Тепловое реле должно сработать оперативно.",

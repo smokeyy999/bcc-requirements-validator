@@ -457,26 +457,26 @@ SEVERITIES = ["Критичная", "Существенная", "Низкая"]
 
 
 def _merge(findings):
-    """Свести повтор одной причины, сохранив ссылки с обеих сторон."""
+    """Only collapse repeated decisions; the reviewer can link genuine paraphrases."""
+    def decision(finding):
+        fields = ("scenario", "consequence", "question", "test", "fix")
+        alternatives = sorted((_canon(option["reading"]), _canon(option["effect"]))
+                              for option in finding["proposal_options"])
+        return tuple(_canon(finding[k]) for k in fields), alternatives
+
     unique = []
     for finding in findings:
         anchors = {(a["id"], a["quote"]) for a in finding["evidence"]}
         for previous in unique:
             other = {(a["id"], a["quote"]) for a in previous["evidence"]}
-            same_topic = _canon(previous["topic"]) == _canon(finding["topic"])
-            same_case = _canon(previous["scenario"]) == _canon(finding["scenario"])
-            same_class = previous["category"] == finding["category"]
-            same_problem = same_topic or (anchors == other and same_case)
-            if (previous["kind"] == finding["kind"] and same_class
+            if (previous["kind"] == finding["kind"] and previous["category"] == finding["category"]
                     and previous["reference"] == finding["reference"]
-                    and anchors & other and same_problem):
+                    and anchors & other and decision(previous) == decision(finding)):
                 previous["ids"] = sorted(set(previous["ids"]) | set(finding["ids"]))
                 previous["evidence"].extend(a for a in finding["evidence"] if a not in previous["evidence"])
                 previous["blocking"] |= finding["blocking"]
                 if SEVERITIES.index(finding["severity"]) < SEVERITIES.index(previous["severity"]):
                     previous["severity"], previous["reason"] = finding["severity"], finding["reason"]
-                if finding["question"] and not previous["question"]:
-                    previous["question"], previous["test"] = finding["question"], finding["test"]
                 break
         else:
             unique.append(finding)
@@ -711,7 +711,7 @@ def _check_question(d, f, source_quotes):
     outcomes = {_canon(result) for result in check["outcomes"]}
     if len(check["outcomes"]) != 2 or len(outcomes) != 2 or "" in outcomes:
         raise DraftError("Для одного испытания укажи два разных наблюдаемых результата, зависящих от ответа", path)
-    if needs_check and f["category"] in {"Полнота", "Проверяемость"}:
+    if needs_check:
         if state == "неполный приёмочный сценарий":
             f["category"] = "Полнота"
         elif state == "нет меры заявленного свойства":
@@ -741,7 +741,7 @@ def _adjudicate_one(d, original, source_quotes=None):
         f.update(question="", test="")
     elif mode == "заменить":
         _nonempty(d, "question", "test")
-        f.update(question=d["question"], test=d["test"])
+        f.update(question=d["question"], test=d["test"], scenario=d["test"])
     if action == "уточнить":
         kept_ids = set(d["supports"])
         if not kept_ids or not kept_ids <= set(original["ids"]):
@@ -818,11 +818,16 @@ def _final_decisions(raw, candidates, claims, signals=()):
     owners = {d["id"]: d["same_decision_as"] for d in raw["decisions"] if d["same_decision_as"]}
     for i, d in enumerate(raw["decisions"]):
         owner = d["same_decision_as"]
-        if not owner:
+        if not owner or d["id"] not in originals:
             continue
         if owner in owners or owner not in retained or not retained[owner]["question"]:
             errors.append(f"/decisions/{i}/same_decision_as: нужен прямой ID оставшейся самостоятельной карточки с вопросом")
             paths.append(f"/decisions/{i}")
+            continue
+        if d["action"] == "снять":
+            duplicate, target = originals[d["id"]], retained[owner]
+            target["ids"] = sorted(set(target["ids"]) | set(duplicate["ids"]))
+            target["evidence"] = target["evidence"] + [e for e in duplicate["evidence"] if e not in target["evidence"]]
             continue
         if d["id"] in retained:
             finding = retained[d["id"]]
@@ -898,7 +903,7 @@ def _questions(findings):
         if not f["question"]:
             continue
         owner = by_id[f.get("same_decision_as", f["id"])]
-        key = _canon(owner["question"])
+        key = owner["id"]
         if key not in questions:
             questions[key] = {"question": owner["question"], "tests": [], "findings": [], "blocking": False}
         q = questions[key]
