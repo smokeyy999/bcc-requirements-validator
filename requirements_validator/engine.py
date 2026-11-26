@@ -9,6 +9,7 @@ from copy import deepcopy
 from .metrics import purpose, stage
 from .prompts import ADJUDICATE, EXTRACT, SYNTHESIZE
 from .signals import SIGNAL_INSTRUCTION, grouped_in, has_support, source_signals
+from .text import simple_source_numbers, text_key as _canon
 
 
 def obj(**fields):
@@ -263,10 +264,6 @@ def _nonempty(record, *names):
             raise ValueError(f"Поле {name} не должно быть пустым")
 
 
-def _canon(text):
-    return " ".join(re.findall(r"\w+", text.casefold()))
-
-
 def _source(block):
     return {"id": block.id, "section": block.section, "source_id": block.source_id,
             "text": block.text}
@@ -394,6 +391,11 @@ def _numbers(text):
     return {"".join(value.split()).replace("−", "-").replace(",", ".") for value in matches}
 
 
+def _source_numbers(evidence):
+    text = "\n".join(item["quote"] for item in evidence)
+    return _numbers(text) | simple_source_numbers(text)
+
+
 def _finding(raw, by_id, blocks, references):
     _nonempty(raw, "topic", "reason", "scenario", "consequence")
     evidence = []
@@ -432,10 +434,11 @@ def _finding(raw, by_id, blocks, references):
             raise ValueError("У трактовок должны различаться смысл и последствия")
         if contradiction and alternatives[0]["id"] == alternatives[1]["id"]:
             raise ValueError("Для двух сторон внутреннего противоречия укажи разные ID в interpretations")
-        source_numbers = _numbers("\n".join(item["quote"] for item in evidence))
+        source_numbers = _source_numbers(evidence)
         for option in proposal_options:
-            if _numbers(option["reading"]) - source_numbers:
-                raise ValueError("В reading есть числовая константа, которой нет в цитатах. Сохрани исходное правило, вычисляемый результат укажи в effect")
+            if missing := _numbers(option["reading"]) - source_numbers:
+                raise ValueError(f"В reading есть числовая константа, которой нет в цитатах ({', '.join(sorted(missing))}). "
+                                 "В reading передай правило словами источника. Вычисляемый результат укажи в effect.")
     elif alternatives:
         raise ValueError("Варианты в interpretations нужны только при неоднозначности или внутреннем противоречии")
     has_question = bool(raw["question"].strip())
@@ -446,7 +449,7 @@ def _finding(raw, by_id, blocks, references):
     if raw["kind"] == "Дефект" and not (has_question or raw["fix"].strip()):
         raise ValueError("Для дефекта нужен вопрос или обоснованное исправление")
     if raw["kind"] == "Дефект" and raw["fix"].strip() and not needs_choice and not ref:
-        if _numbers(raw["fix"]) - _numbers("\n".join(item["quote"] for item in evidence)):
+        if _numbers(raw["fix"]) - _source_numbers(evidence):
             raise ValueError("В fix есть число, не подтверждённое цитатами. Исправь правку или задай вопрос с тестом")
     return dict(raw, reference=references.get(ref), ids=ids, evidence=evidence, interpretations=interpretations,
                 proposal_options=proposal_options,

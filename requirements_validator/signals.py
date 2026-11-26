@@ -4,6 +4,8 @@ from collections import defaultdict
 from fractions import Fraction
 import re
 
+from .text import INTEGER_WORDS
+
 
 # Factors within each dimension use one exact common scale.
 _UNITS = (
@@ -20,12 +22,7 @@ _UNITS = (
     ("mg", 1000000, r"килограмм\w*|kilograms?|kg|кг"),
 )
 _UNIT = "(?:" + "|".join(pattern for _, _, pattern in _UNITS) + r")(?!\w)"
-_WORDS = {}
-for words in ("ноль один два три четыре пять шесть семь восемь девять десять одиннадцать двенадцать тринадцать четырнадцать пятнадцать шестнадцать семнадцать восемнадцать девятнадцать",
-              "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen"):
-    _WORDS.update({word: value for value, word in enumerate(words.split())})
-_WORDS.update({"одна": 1, "одно": 1, "две": 2})
-_NUMBER = r"(?:[+-]?\d{1,12}(?:[.,]\d{1,9})?|" + "|".join(_WORDS) + r")"
+_NUMBER = r"(?:[+-]?\d{1,12}(?:[.,]\d{1,9})?|" + "|".join(INTEGER_WORDS) + r")"
 _DECLARATION = re.compile(
     r"\b(?:зада[её]тся|указывается|измеряется|выражается|задан[аоы]?|указан[аоы]?|выражен[аоы]?|"
     r"измерен[аоы]?|specified|expressed|measured|given)\s+(?:в|in)\s+(?P<unit>" + _UNIT + ")", re.I)
@@ -50,7 +47,7 @@ def _measure(unit):
 
 
 def _number(token):
-    value = _WORDS.get(token.casefold())
+    value = INTEGER_WORDS.get(token.casefold())
     return Fraction(value) if value is not None else Fraction(token.replace(",", "."))
 
 

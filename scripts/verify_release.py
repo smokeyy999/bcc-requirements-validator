@@ -9,6 +9,7 @@ import subprocess
 from urllib.parse import unquote
 
 from requirements_validator.__main__ import save_complete
+from requirements_validator.text import text_key
 from scripts.verify_report import verify
 
 
@@ -33,13 +34,13 @@ def verify_choices(proposal, body, location):
         outcome = re.search(r'^\s*\*\*Ожидаемый результат\.\*\* (\S.*)', branch, re.M)
         if not grounding or grounding[1] not in evidence or not outcome or not branch.partition('\n')[0].strip():
             raise ValueError(f'{location}: варианту требуется формулировка, своё основание и наблюдаемый результат')
-        outcomes.add(' '.join(outcome[1].casefold().split()))
+        outcomes.add(_question_key(outcome[1]))
     if len(outcomes) != (len(parts)-1) // 3:
         raise ValueError(f'{location}: в разных вариантах повторён один ожидаемый результат')
 
 
 def _question_key(value):
-    return tuple(re.findall(r'\w+', html.unescape(value).casefold()))
+    return text_key(html.unescape(value))
 
 
 def _check_blocking_groups(text, cards, report):

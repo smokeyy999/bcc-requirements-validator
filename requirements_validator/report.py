@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 from urllib.parse import quote
 
+from .text import text_key
+
 
 def plain(value):
     """Буквальное отображение текста из модели или документа в Markdown."""
@@ -25,19 +27,17 @@ def question_basis(finding):
     check = finding.get("question_basis")
     if not check:
         return []
-    def key(text):
-        return " ".join(re.findall(r"\w+", text.casefold()))
     premise = finding.get("open_premise", {})
-    shown = {key(finding.get(k, "")) for k in ("scenario", "consequence", "reason", "question", "test", "topic")}
-    shown.update(key(premise.get(k, "")) for k in ("condition", "effect"))
-    shown.update(key(option["effect"]) for option in finding.get("proposal_options", []))
+    shown = {text_key(finding.get(k, "")) for k in ("scenario", "consequence", "reason", "question", "test", "topic")}
+    shown.update(text_key(premise.get(k, "")) for k in ("condition", "effect"))
+    shown.update(text_key(option["effect"]) for option in finding.get("proposal_options", []))
     cited = list(dict.fromkeys([check["obligation_id"], *check["checked_ids"]]))
     lines = []
     for label, value in (("Уже установлено", check["known_answer"]), ("Открытое решение", check["decision"])):
-        if key(value) not in shown:
+        if text_key(value) not in shown:
             lines.append(f"**{label}.** {plain(value)}")
-            shown.add(key(value))
-    outcomes = [plain(value) for value in check["outcomes"] if key(value) not in shown]
+            shown.add(text_key(value))
+    outcomes = [plain(value) for value in check["outcomes"] if text_key(value) not in shown]
     if outcomes:
         lines.append("**Что различит проверка.** " + " / ".join(outcomes))
     if lines:
