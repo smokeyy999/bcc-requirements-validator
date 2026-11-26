@@ -8,7 +8,7 @@ from copy import deepcopy
 
 from .bounds import (capacity_pairs, diagnosis as capacity_diagnosis, linked as capacity_linked,
                      missing_capacity_basis, unresolved_capacity)
-from . import command_rules
+from . import command_rules, observation_scope
 from .condition_evidence import direct_condition_evidence
 from .example_scope import EXAMPLE_SCOPE_INSTRUCTION, input_scope_error, unbound_response_examples
 from .metrics import purpose, stage
@@ -18,6 +18,8 @@ from .question_scope import (
 )
 from .references import (REFERENCE_INSTRUCTION, has_independent_basis, missing_references,
                          reference_findings, repeats_reference)
+from .refund_scope import REFUND_INSTRUCTION, refund_rules, refund_scope_error
+from .response_representation import REPRESENTATION_INSTRUCTION, representation_error, response_obligations
 from .signals import SIGNAL_INSTRUCTION, grouped_in, has_support, source_signals
 from .text import simple_source_numbers, text_key as _canon
 from .transition_result import missing_transition_result
@@ -882,7 +884,7 @@ def _adjudicate_one(d, original, source_quotes=None):
 
 
 def _final_decisions(raw, candidates, claims, signals=(), verified_refs=(), capacities=(), unbound_examples=None,
-                     scheduled=()):
+                     scheduled=(), measurement_scopes=()):
     _nonempty(raw, "assessment", "readiness")
     originals = {f["id"]: f for f in candidates}
     source_quotes = {c["id"]: c["quote"] for c in claims}
@@ -902,6 +904,12 @@ def _final_decisions(raw, candidates, claims, signals=(), verified_refs=(), capa
                 raise DraftError(issue, ["/action", "/case_check", "/question_mode", "/question", "/test", "/question_check"])
             if issue := scope_error(finding, prior, source_quotes):
                 raise DraftError(issue, ["/action", "/question_mode", "/question", "/test", "/question_check"])
+            issue = (refund_scope_error(finding, prior, source_quotes)
+                     or representation_error(finding, prior, source_quotes)
+                     or (observation_scope.scope_error(finding, measurement_scopes) if finding else ""))
+            if issue:
+                raise DraftError(issue, ["/action", "/reason", "/case_check", "/supports", "/question_mode",
+                                         "/question", "/test", "/question_check"])
             if finding and not has_independent_basis(finding, verified_refs, source_quotes):
                 raise DraftError('Отдельный вопрос, связанный с оборванной ссылкой, требует положительного '
                                  'основания. В decision приведи в «ёлочках» дословную выдержку из obligation_id '
@@ -1069,6 +1077,16 @@ def review(document, provider, progress=lambda msg: None):
     if signals:
         payload["source_signals"] = signals
     instructions = ("\n" + SIGNAL_INSTRUCTION if signals else "")
+    focused_checks = {}
+    measurements = observation_scope.measurement_scopes(document.blocks, claims)
+    for key, sources, instruction in (
+            ("refund_rules", refund_rules(claims), REFUND_INSTRUCTION),
+            ("returned_state_on_error", response_obligations(document.blocks), REPRESENTATION_INSTRUCTION),
+            ("measurement_scopes", measurements, observation_scope.INSTRUCTION)):
+        if sources:
+            focused_checks[key] = sources
+            instructions += "\n" + instruction
+    payload.update(focused_checks)
     unbound_examples = unbound_response_examples(document.blocks)
     if unbound_examples:
         payload["response_examples_without_request"] = unbound_examples
@@ -1101,6 +1119,7 @@ def review(document, provider, progress=lambda msg: None):
     audit_payload = {"blocks": payload["blocks"], "candidates": [_audit_candidate(f) for f in candidates],
                      "trace_review": trace_review,
                      "claims": [{k: c[k] for k in ("id", "block", "quote")} for c in claims]}
+    audit_payload.update(focused_checks)
     if unbound_examples:
         audit_payload["response_examples_without_request"] = unbound_examples
     if boundaries:
@@ -1120,7 +1139,8 @@ def review(document, provider, progress=lambda msg: None):
     findings, notes, set_review = _request(provider, ADJUDICATE + instructions,
                                           audit_payload, AUDIT,
                                           lambda data: _final_decisions(data, candidates, claims, signals, fixed,
-                                                                        capacities, unbound_examples, scheduled), progress)
+                                                                        capacities, unbound_examples, scheduled,
+                                                                        measurements), progress)
     stage("validation")
     for claim in claims:
         ident = claim["id"]
