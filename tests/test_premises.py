@@ -10,7 +10,7 @@ class PremiseReviewTests(unittest.TestCase):
         self.item = dict(id="Z-001", kind="Дефект", category="Противоречивость", counted=True,
                          topic="Значение после цикла", ids=[a["id"] for a in evidence], evidence=evidence,
                          question="Почему экран показывает неверный итог?", test="Проверить итог цикла.",
-                         fix="", blocking=True, interpretations=[], proposal_options=["ранний вариант"])
+                         fix="", blocking=True, interpretations=[], proposal_options=[{"anchor": e} for e in evidence])
         self.decision = dict(id="Z-001", action="уточнить", question_mode="заменить",
                              basis="Обоснованное ожидание", severity="Существенная", blocking=False,
                              supports=list(self.item["ids"]), question="Чему равно начальное показание?",

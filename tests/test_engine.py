@@ -318,14 +318,16 @@ class TestReview(unittest.TestCase):
         self.local["claims"][0]["status"] = "недостаточно данных"
         with self.assertRaisesRegex(ValueError, "Нет результата"):
             review(self.document, Responses(self.local, self.whole, self.whole))
-        self.whole["resolved"] = [{"id": "R-M01-02", "reason": "Вместимость прямо указана."}]
+        self.whole["resolved"] = [{"id": "R-M01-02", "reason": "Вместимость прямо указана.", "supports": ["R-M01-02"]}]
         claim = review(self.document, Responses(self.local, self.whole))["requirements"][1]
         self.assertEqual(claim["assessment"], "Вместимость прямо указана.")
+        self.assertEqual(claim["resolution_sources"], ["R-M01-02"])
 
     def test_global_correction_only_appends_missing_resolution(self):
         self.local["claims"][0]["status"] = "проверить"
         correction = {"changes": [{"op": "append", "path": "/resolved/-",
-                                   "value": json.dumps({"id": "R-M01-02", "reason": "Указано число мест."})}]}
+                                   "value": json.dumps({"id": "R-M01-02", "reason": "Указано число мест.",
+                                                        "supports": ["R-M01-02"]})}]}
         log = []
         provider = Responses(self.local, self.whole, correction)
         result = review(self.document, provider, log.append)
@@ -334,8 +336,17 @@ class TestReview(unittest.TestCase):
         self.assertEqual(result["requirements"][1]["assessment"], "Указано число мест.")
         self.assertEqual(result["counts"]["defects"], 1)
 
+    def test_a_local_candidate_cannot_be_resolved_using_missing_or_unknown_sources(self):
+        self.local["claims"][0]["status"] = "проверить"
+        for supports in ([], ["R-ABSENT"]):
+            with self.subTest(supports=supports):
+                self.whole["resolved"] = [{"id": "R-M01-02", "reason": "Якобы разрешено исключением.",
+                                           "supports": supports}]
+                with self.assertRaisesRegex(ValueError, "/resolved/0/supports"):
+                    review(self.document, Responses(self.local, self.whole, {"changes": []}))
+
     def test_same_rule_can_have_resolved_and_independent_finding(self):
-        self.whole["resolved"] = [{"id": "R-M01-01", "reason": "Срок отмены прямо указан."}]
+        self.whole["resolved"] = [{"id": "R-M01-01", "reason": "Срок отмены прямо указан.", "supports": ["R-M01-01"]}]
         result = review(self.document, Responses(self.local, self.whole))
         claim = result["requirements"][0]
         self.assertEqual(claim["findings"], ["Z-001"])
@@ -367,7 +378,8 @@ class TestReview(unittest.TestCase):
             case_check=dict(status="требует ответа", condition="Какая схема рассадки применима?",
                             effect="При разных схемах число доступных мест может различаться.",
                             anchors=[{"id": "R-M01-02", "quote": self.second}])))
-        self.whole["resolved"] = [{"id": "R-M01-01", "reason": audit["decisions"][0]["reason"]}]
+        self.whole["resolved"] = [{"id": "R-M01-01", "reason": audit["decisions"][0]["reason"],
+                                   "supports": ["R-M01-01", "R-M02-01"]}]
         first, capacity, _ = review(self.document, Responses(self.local, self.whole, audits=[audit]))["requirements"]
         self.assertEqual(first["findings"], ["Z-001"])
         self.assertEqual(first["assessment"], audit["decisions"][0]["reason"])
@@ -385,7 +397,7 @@ class TestReview(unittest.TestCase):
     def test_valid_patch_must_pass_complete_revalidation(self):
         self.local["claims"][0]["status"] = "проверить"
         patch = {"changes": [{"op": "append", "path": "/resolved/-",
-                              "value": json.dumps({"id": "R-fake", "reason": "не подтверждено"})}]}
+                              "value": json.dumps({"id": "R-fake", "reason": "не подтверждено", "supports": []})}]}
         with self.assertRaisesRegex(ValueError, "Проверьте|Повторный ответ"):
             review(self.document, Responses(self.local, self.whole, patch))
 
@@ -439,6 +451,38 @@ class TestReview(unittest.TestCase):
         self.assertFalse(result["set_review"]["priorities"])
         self.assertEqual(result["requirements"][0]["assessment"], audit["decisions"][0]["reason"])
         self.assertEqual(result["requirements"][0]["status"], "Нарушений не выявлено")
+
+    def test_retraction_can_use_an_explicit_exception_from_another_source_passage(self):
+        exception = "Плату удерживают только при отмене аренды всей площадки."
+        self.blocks[2].text = exception
+        self.local["context"] = []
+        self.local["claims"].append(dict(self.local["claims"][0], block="M03", quote=exception,
+                                         summary=exception, assessment="Проверить условия аренды."))
+        audit = agreed_audit()
+        decision = audit["decisions"][0]
+        decision.update(action="снять", blocking=False, question_mode="убрать",
+                        reason="Область платной отмены прямо ограничена типом аренды.")
+        decision["case_check"].update(status="разные условия", condition="Бронирование зала и аренда всей площадки.")
+        third = {"id": "R-M03-01", "quote": exception}
+        decision["case_check"]["anchors"].append(third)
+        audit.update(priorities=[], assessment="Правила разделены.", readiness="Можно проверять оба случая.")
+        result = review(self.document, Responses(self.local, self.whole, audits=[audit]))
+        self.assertFalse(result["findings"])
+        self.assertIn(third["id"], result["requirements"][0]["resolution_sources"])
+        third["quote"] = "Применяется более позднее из правил."
+        with self.assertRaisesRegex(ValueError, "дословные"):
+            review(self.document, Responses(self.local, self.whole, audits=[audit, {"changes": []}]))
+
+    def test_context_cannot_replace_either_rule_of_a_dismissed_conflict(self):
+        self.issue["evidence"].append({"id": "R-M01-02", "quote": self.second})
+        audit = agreed_audit()
+        audit.update(priorities=[])
+        decision = audit["decisions"][0]
+        decision.update(action="снять", blocking=False, question_mode="убрать")
+        decision["case_check"].update(status="разные условия")
+        decision["case_check"]["anchors"][1] = {"id": "R-M01-02", "quote": self.second}
+        with self.assertRaisesRegex(ValueError, "обеих сторон"):
+            review(self.document, Responses(self.local, self.whole, audits=[audit, {"changes": []}]))
 
     def test_question_downgrade_keeps_only_verified_source(self):
         audit = agreed_audit()

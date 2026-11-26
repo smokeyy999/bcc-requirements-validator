@@ -21,6 +21,47 @@ def refs(ids):
     return ", ".join(f"[{item}](#{item.lower()})" for item in ids)
 
 
+def _contacts(blocks):
+    """Read explicit role/value fields in document metadata and retain their scope."""
+    roles = {"автор", "автор тз", "аналитик", "владелец продукта", "бизнес-заказчик",
+             "ответственный", "согласующий", "author", "business owner", "product owner", "owner"}
+    metadata_headings = {"общие сведения", "общие параметры", "паспорт документа", "реквизиты",
+                         "метаданные", "document metadata", "metadata", "document information"}
+    contacts = []
+    for block in blocks:
+        if block.kind != "table":
+            continue
+        section, _, columns = block.section.partition(" / Столбцы:")
+        headings = tuple(section.split(" / "))
+        if headings[-1].casefold() in metadata_headings:
+            scope = headings[:-1]
+        elif len(headings) == 1 and columns.strip().casefold() in {"поле · значение", "field · value"}:
+            scope = headings
+        else:
+            continue
+        row = block.text.strip()
+        fields = row.split("\t") if "\t" in row else row.strip("|").split("|")
+        if len(fields) != 2:
+            continue
+        label, value = (part.strip().strip("*`").strip() for part in fields)
+        if not all(role.strip() in roles for role in label.casefold().split("/")):
+            continue
+        if value.casefold() in {"", "-", "—", "–", "tbd", "n/a", "не указан", "не назначен", "не определён"}:
+            continue
+        contacts.append((scope, block, label, value))
+    return contacts
+
+
+def _question_stage(question, linked):
+    if question["blocking"]:
+        return 0
+    if any(f["counted"] for f in linked):
+        return 1
+    if linked and all(f["severity"] == "Низкая" for f in linked):
+        return 3
+    return 2
+
+
 def author_proposal(finding):
     """Keep each proposed choice next to its source and testable outcome."""
     if not finding["counted"]:
@@ -75,17 +116,16 @@ def render(doc, result, run, source_path, output_path):
     except ValueError:  # На Windows у путей могут быть разные диски.
         source_link = source_path.resolve().as_uri()
 
-    def location(item):
-        block = blocks[item["block"]]
+    def source_location(block):
         if source_path.suffix.casefold() == ".docx":
             anchor = ""
         else:
             anchor = f"#page={block.page}" if block.page else f"#L{block.first_line}"
-        return f'{plain(item["section"])} · [{plain(item["location"])}]({source_link}{anchor})'
+        return f'[{plain(block.location)}]({source_link}{anchor})'
 
     def evidence(item):
         lines = plain(item["quote"]).splitlines()
-        return f'{location(item)}\n\n' + "\n".join(f"> {line}  " for line in lines)
+        return f'{plain(item["section"])} · {source_location(blocks[item["block"]])}\n\n' + "\n".join(f"> {line}  " for line in lines)
 
     counts = result["counts"]
     findings = result["findings"]
@@ -113,7 +153,7 @@ def render(doc, result, run, source_path, output_path):
         f'критичных дефектов — {len(critical)} · вопросов к автору — {counts["questions"]}.**',
         plain(summary["readiness"]),
         (f'**Блокирующих вопросов — {len(blocking_questions)}.** ' + ' · '.join(short_list)).rstrip(),
-        "[Критичные дефекты](#critical) · [Вопросы](#questions) · [Замечания](#findings) · "
+        "[Критичные дефекты](#critical) · [Вопросы и порядок согласования](#questions) · [Замечания](#findings) · "
         "[Соответствие ID](#mapping) · [Проверка каждого требования](#checks) · [Итог](#decision)",
         "## Паспорт прогона",
         "| Поле | Значение |\n|---|---|\n"
@@ -140,11 +180,41 @@ def render(doc, result, run, source_path, output_path):
     parts.append("\n".join(f'- {refs([f["id"]])} · {plain(f["reason"])}' for f in critical)
                  or "Критичных дефектов не выявлено.")
     parts.append('<a id="questions"></a>\n\n## Вопросы к автору ТЗ')
-    for q in sorted(result["questions"], key=lambda item: not item["blocking"]):
-        prefix = "Блокирует приёмку" if q["blocking"] else "Требует уточнения"
-        parts.extend([f'**{plain(q["question"])}**', f'{prefix} · {refs(q["findings"])}. '
-                      f'Зависимый сценарий — {plain(q["test"])}'])
-    if not result["questions"]:
+    if result["questions"]:
+        parts.append("Вопросы приведены в порядке согласования. Автор ТЗ фиксирует решение, "
+                     "затем QA проверяет указанный сценарий.")
+        by_id = {f["id"]: f for f in findings}
+        contacts = _contacts(doc.blocks)
+        used_contacts = {}
+        stages = [[], [], [], []]
+        for q in result["questions"]:
+            ids = list(dict.fromkeys(q["findings"]))
+            linked = [by_id[i] for i in ids]
+            evidence_sections = {tuple(blocks[ev["block"]].section.split(" / "))
+                                 for f in linked for ev in f["evidence"]}
+            addresses = []
+            for scope, block, label, value in contacts:
+                if any(section[:len(scope)] == scope for section in evidence_sections):
+                    target = f"contact-{block.id.lower()}"
+                    used_contacts[target] = (scope, block, label, value)
+                    addresses.append(f'[{plain(label)}](#{target})')
+            prefix = "Блокирует приёмку" if q["blocking"] else "Требует уточнения"
+            detail = f'{prefix} · {refs(ids)}. Зависимый сценарий — {plain(q["test"])}'
+            if addresses:
+                detail += "\n\nРоли в связанных разделах ТЗ — " + ", ".join(addresses) + "."
+            stages[_question_stage(q, linked)].extend([f'**{plain(q["question"])}**', detail])
+        if used_contacts:
+            parts.append("### Кому передать вопросы")
+            for target, (scope, block, label, value) in used_contacts.items():
+                section = " / ".join(scope) or doc.title
+                parts.append(f'<a id="{target}"></a>\n\n{plain(section)} · {plain(label)} — '
+                             f'{plain(value)}. {source_location(block)}')
+        headings = ("Согласовать до приёмки", "Выбрать исправление для выявленного нарушения",
+                    "Уточнить ожидаемое поведение", "Разобрать детали низкого приоритета")
+        for heading, entries in zip(headings, stages):
+            if entries:
+                parts.extend(["### " + heading, *entries])
+    else:
         parts.append("Открытых вопросов по результатам проверки нет.")
     parts.append('<a id="findings"></a>\n\n## Реестр замечаний')
     for f in findings:
@@ -186,7 +256,15 @@ def render(doc, result, run, source_path, output_path):
                       evidence(r), f'**{plain(r["status"])}.** {plain(r["assessment"])}'])
         if r["findings"]:
             parts.append("Связанные замечания — " + refs(r["findings"]) + ".")
+        resolved_by = [ident for ident in dict.fromkeys(r.get("resolution_sources", [])) if ident != r["id"]]
+        if resolved_by:
+            parts.append("Основания для снятия замечания — " + refs(resolved_by) + ".")
     parts.extend(['<a id="decision"></a>\n\n## Готовность и порядок исправлений', plain(summary["readiness"])])
     if summary["priorities"]:
-        parts.append("\n".join(f'{i}. {plain(t)}' for i, t in enumerate(summary["priorities"], 1)))
+        finding_ids = {f["id"] for f in findings}
+        def link_finding(match):
+            ident = match.group()
+            return refs([ident]) if ident in finding_ids else ident
+        steps = [re.sub(r"\bZ-\d+\b", link_finding, plain(t)) for t in summary["priorities"]]
+        parts.append("\n".join(f'{i}. {step}' for i, step in enumerate(steps, 1)))
     return "\n\n".join(parts) + "\n"

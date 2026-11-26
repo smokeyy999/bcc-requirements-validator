@@ -1,12 +1,69 @@
 """Проверка внешнего основания на коротком синтетическом примере."""
+import re
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from requirements_validator.report import author_proposal, render
 from requirements_validator.source import read_document
 
 
 class ReferenceRenderingTest(unittest.TestCase):
+    def test_agenda_groups_questions_and_routes_only_to_declared_contacts_in_scope(self):
+        source_text = """# Мастерская
+## Приём
+### Паспорт документа
+| Поле | Значение |
+|---|---|
+| Автор | Группа приёмки |
+### Правила
+Каждый заказ получает номер.
+## Выпуск
+### Паспорт документа
+| Поле | Значение |
+|---|---|
+| Автор | Группа выпуска |
+### Правила
+Для выпуска нужен талон.
+"""
+        with TemporaryDirectory() as tmp:
+            source = Path(tmp) / "spec.md"
+            source.write_text(source_text, encoding="utf-8")
+            doc = read_document(source)
+            a, b = (next(block for block in doc.blocks if block.text == text)
+                    for text in ("Каждый заказ получает номер.", "Для выпуска нужен талон."))
+            claims, findings, questions = [], [], []
+            for i, (block, severity, counted, blocking) in enumerate((
+                    (a, "Низкая", False, False), (b, "Существенная", False, False),
+                    (b, "Существенная", True, False), (a, "Критичная", True, True)), 1):
+                rule_id, ident = f"R-M000{i}-01", f"Z-{i:03}"
+                ev = dict(id=rule_id, block=block.id, section=block.section, location=block.location, quote=block.text)
+                claims.append(dict(ev, summary=block.text, source_id=None, status="Проверено", assessment="Есть вопрос.",
+                                   findings=[ident], resolution_sources=[]))
+                findings.append(dict(id=ident, ids=[rule_id], kind="Дефект" if counted else "Предполагаемый пробел",
+                                     topic=f"Тема {i}", category="Полнота", severity=severity, reason="Причина.", counted=counted,
+                                     evidence=[ev], scenario="Проверить.", consequence="", interpretations=[], fix=""))
+                questions.append(dict(question=f"Вопрос {i}?", test=f"Тест {i}.", findings=[ident, ident], blocking=blocking))
+            claims[0]["resolution_sources"] = [claims[0]["id"], claims[1]["id"], claims[1]["id"]]
+            result = dict(requirements=claims, questions=questions, findings=findings,
+                          counts=dict(requirements=4, defects=2, questions=4, gaps=2, ambiguities=0, recommendations=0),
+                          set_review=dict(readiness="Готовность.", assessment="Проверено.", priorities=["Согласовать Z-004."]))
+            run = dict(origin="Фикстура", started="", finished="", seconds=0., commit="abc",
+                       state="чистая", provider="Фикстура", model="Фикстура")
+            output = render(doc, result, run, source, source.with_suffix(".report.md"))
+            agenda = output.split("## Вопросы к автору ТЗ", 1)[1].split('<a id="findings">', 1)[0]
+            self.assertEqual(["4", "3", "2", "1"], re.findall(r"\*\*Вопрос (\d)\?\*\*", agenda))
+            for i, contact in enumerate(("Группа приёмки", "Группа выпуска", "Группа выпуска", "Группа приёмки"), 1):
+                item = agenda.split(f"**Вопрос {i}?**")[1].split("###")[0]
+                target = re.search(r"Роли в связанных разделах ТЗ — \[Автор\]\(#([^)]+)\)", item)[1]
+                self.assertIn(f"Тест {i}.", item)
+                self.assertEqual(item.count(f"[Z-{i:03}](#z-{i:03})"), 1)
+                scope = agenda.split(f'<a id="{target}"></a>')[1].split("\n\n", 2)[1]
+                self.assertIn(contact, scope)
+                self.assertRegex(scope, r"\[строка \d+\]\(spec.md#L\d+\)")
+            self.assertIn("1. Согласовать [Z-004](#z-004).", output)
+            self.assertIn("Основания для снятия замечания — [R-M0002-01](#r-m0002-01).", output)
+
     def test_document_fix_checks_the_corrected_rule_instead_of_repeating_the_problem(self):
         anchor = dict(id="R-M0001-01", quote="Лимит посетителей указан в разделе «Часы работы».")
         finding = dict(counted=True, evidence=[anchor], ids=[anchor["id"]], proposal_options=[],

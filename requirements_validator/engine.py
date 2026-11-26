@@ -61,7 +61,7 @@ FINDING = obj(
 )
 TRACE = obj(aspect=enum(OPERATION, VALUE), subjects=array(STR), supports=array(STR),
             reasoning=STR, finding_topic=STR)
-GLOBAL = obj(findings=array(FINDING), resolved=array(obj(id=STR, reason=STR)),
+GLOBAL = obj(findings=array(FINDING), resolved=array(obj(id=STR, reason=STR, supports=array(STR))),
              traces=array(TRACE), scope=obj(operations=STR, values=STR),
              assessment=STR, readiness=STR, priorities=array(STR))
 CASE_CHECK = obj(status=enum("подтверждено", "разные условия", "требует ответа", "не применимо"),
@@ -587,7 +587,12 @@ def _set_result(raw, claims, blocks, required, references):
             errors.append(f"/resolved/{i}: пустая причина, посторонний или повторный ID {ident}")
             paths.append(f"/resolved/{i}")
             continue
-        resolved[ident] = row["reason"]
+        supports = row["supports"]
+        if not supports or not set(supports) <= by_id.keys():
+            errors.append(f"/resolved/{i}/supports: укажи существующие ID утверждений, текст которых снимает сомнение")
+            paths.append(f"/resolved/{i}")
+            continue
+        resolved[ident] = {"reason": row["reason"], "supports": list(dict.fromkeys(supports))}
     pending = {c["id"] for c in claims if c["status"] != "проверяемо"} - linked - resolved.keys()
     if pending:
         errors.append("Нет результата сквозной проверки кандидатов " + ", ".join(sorted(pending)))
@@ -599,7 +604,7 @@ def _set_result(raw, claims, blocks, required, references):
     if errors:
         raise DraftError("\n".join(errors), paths, evidence_ids)
     # В свободном тексте тоже нельзя ссылаться на вымышленные ID данного протокола.
-    prose = [raw["assessment"], raw["readiness"], *raw["priorities"], *resolved.values()]
+    prose = [raw["assessment"], raw["readiness"], *raw["priorities"], *(r["reason"] for r in resolved.values())]
     for f in findings:
         prose.extend(f[key] for key in ("topic", "scenario", "consequence", "reason", "question", "test", "fix"))
     for text in prose:
@@ -609,7 +614,7 @@ def _set_result(raw, claims, blocks, required, references):
     return findings, resolved, {"scope": raw["scope"], "traces": raw["traces"]}
 
 
-def _check_case(d, original):
+def _check_case(d, original, source_quotes):
     """Link the reviewer's applicability decision to the candidate's verified evidence."""
     case = d["case_check"]
     conflict = original["kind"] == "Дефект" and original["category"] == "Противоречивость"
@@ -623,15 +628,26 @@ def _check_case(d, original):
         return
     _nonempty(case, "condition")
     anchors = case["anchors"]
-    if not anchors or any(not a["quote"].strip() or not any(
-            a["id"] == e["id"] and a["quote"] in e["quote"] for e in original["evidence"]
-    ) for a in anchors):
-        raise DraftError("Для проверки условия нужны дословные непустые фрагменты evidence с их ID",
+    # A genuine exception can be stated outside the passages selected by the
+    # first reviewer. Only a withdrawal may use such a source to refute it.
+    def verified(anchor):
+        ident, quote = anchor["id"], anchor["quote"]
+        if not quote.strip():
+            return False
+        if d["action"] == "снять" and quote in source_quotes.get(ident, ""):
+            return True
+        return any(ident == e["id"] and quote in e["quote"] for e in original["evidence"])
+
+    if not anchors or not all(verified(anchor) for anchor in anchors):
+        raise DraftError("Для проверки условия нужны дословные непустые фрагменты источника с их ID",
                          ["/case_check/anchors"])
     ids = {a["id"] for a in anchors}
+    if conflict and (d["action"] == "снять" or (d["action"] == "оставить" and case["status"] == "подтверждено")):
+        sides = {option["anchor"]["id"] for option in original["proposal_options"]}
+        if len(ids.intersection(original["ids"])) < 2 or not sides <= ids:
+            raise DraftError("Для обеих сторон конфликта нужны фрагменты тех утверждений, которые дают разные исходы",
+                             ["/case_check/anchors"])
     if case["status"] == "подтверждено":
-        if conflict and d["action"] == "оставить" and len(ids) < 2:
-            raise DraftError("Приведи подтверждение общих условий с обеих сторон конфликта", ["/case_check/anchors"])
         return
     if case["status"] == "разные условия":
         if compares_outcomes and d["action"] == "оставить":
@@ -646,18 +662,18 @@ def _check_case(d, original):
         raise ValueError("Условный конфликт при недоказанной предпосылке не является критичным или блокирующим")
 
 
-def _adjudicate_one(d, original):
+def _adjudicate_one(d, original, source_quotes=None):
     _nonempty(d, "reason")
     action, mode = d["action"], d["question_mode"]
     if mode != "заменить" and (d["question"] or d["test"]):
         raise ValueError("Новые question и test разрешены только в режиме замены")
     if action != "уточнить" and d["supports"]:
         raise ValueError("supports предназначен для пониженного до вопроса замечания")
+    _check_case(d, original, source_quotes or {})
     if action == "снять":
         if d["blocking"] or mode != "убрать":
             raise ValueError("Снятое замечание не должно оставлять блокирующий вопрос")
         return None
-    _check_case(d, original)
     direct = d["basis"] == "Прямое обязательство"
     if d["basis"] == "Вне требований":
         raise ValueError("Сценарий без опоры в документе следует снять")
@@ -709,6 +725,7 @@ def _adjudicate_one(d, original):
 def _final_decisions(raw, candidates, claims):
     _nonempty(raw, "assessment", "readiness")
     originals = {f["id"]: f for f in candidates}
+    source_quotes = {c["id"]: c["quote"] for c in claims}
     seen, kept, notes = set(), [], {}
     errors, paths = [], []
     for i, decision in enumerate(raw["decisions"]):
@@ -720,7 +737,7 @@ def _final_decisions(raw, candidates, claims):
         seen.add(ident)
         prior = originals[ident]
         try:
-            finding = _adjudicate_one(decision, prior)
+            finding = _adjudicate_one(decision, prior, source_quotes)
         except ValueError as error:
             row_path = f"/decisions/{i}"
             targets = [row_path + suffix for suffix in error.paths] if isinstance(error, DraftError) else [row_path]
@@ -730,12 +747,13 @@ def _final_decisions(raw, candidates, claims):
         if finding is not None:
             kept.append(finding)
         if decision["action"] != "оставить":
+            refuting_sources = [a["id"] for a in decision["case_check"]["anchors"]] if finding is None else []
             for ref in prior["ids"]:
                 if finding is None or ref in finding["ids"]:
                     explanation = decision["reason"]
                 else:
                     explanation = "При сквозной проверке это утверждение исключено из оснований замечания."
-                notes.setdefault(ref, []).append(explanation)
+                notes.setdefault(ref, []).append((explanation, refuting_sources))
     if seen != originals.keys():
         errors.append("Нет решения по замечаниям " + ", ".join(sorted(originals.keys() - seen)))
         paths.append("/decisions/-")
@@ -837,7 +855,7 @@ def review(document, provider, progress=lambda msg: None):
     progress(f"Независимая проверка оснований и вопросов по всему источнику: замечаний {len(candidates)}.")
     audit_payload = {"blocks": payload["blocks"], "candidates": [_audit_candidate(f) for f in candidates],
                      "trace_review": trace_review,
-                     "claims": [{k: c[k] for k in ("id", "block", "summary")} for c in claims]}
+                     "claims": [{k: c[k] for k in ("id", "block", "quote")} for c in claims]}
     findings, notes, set_review = _request(provider, ADJUDICATE, audit_payload, AUDIT,
                                           lambda data: _final_decisions(data, candidates, claims), progress)
     stage("validation")
@@ -848,10 +866,16 @@ def review(document, provider, progress=lambda msg: None):
         # Links include contextual evidence. A finding may concern the relationship
         # between other rules without invalidating this individual statement.
         reasons = [f["reason"] for f in links]
+        resolution_sources = []
         if ident in resolved and not any(f.get("open_premise") for f in links):
-            reasons.append(resolved[ident])
+            reasons.append(resolved[ident]["reason"])
+            resolution_sources.extend(resolved[ident]["supports"])
         if not links:
-            reasons.extend(notes.get(ident, []))
+            for explanation, supports in notes.get(ident, []):
+                reasons.append(explanation)
+                resolution_sources.extend(supports)
+        if resolution_sources:
+            claim["resolution_sources"] = list(dict.fromkeys(resolution_sources))
         if reasons:
             claim["assessment"] = " ".join(dict.fromkeys(reasons))
         if any(f["counted"] for f in links):
