@@ -8,6 +8,7 @@ from copy import deepcopy
 
 from .bounds import (capacity_pairs, diagnosis as capacity_diagnosis, linked as capacity_linked,
                      missing_capacity_basis, unresolved_capacity)
+from . import command_rules
 from .condition_evidence import direct_condition_evidence
 from .example_scope import EXAMPLE_SCOPE_INSTRUCTION, input_scope_error, unbound_response_examples
 from .metrics import purpose, stage
@@ -19,6 +20,7 @@ from .references import (REFERENCE_INSTRUCTION, has_independent_basis, missing_r
                          reference_findings, repeats_reference)
 from .signals import SIGNAL_INSTRUCTION, grouped_in, has_support, source_signals
 from .text import simple_source_numbers, text_key as _canon
+from .transition_result import missing_transition_result
 
 
 def obj(**fields):
@@ -584,7 +586,7 @@ def _check_traces(raw, by_id, required, findings):
 
 
 def _set_result(raw, claims, blocks, required, references, signals=(), verified_refs=(), boundaries=None,
-                capacities=()):
+                capacities=(), scheduled=()):
     _nonempty(raw, "assessment", "readiness")
     if any(not step.strip() for step in raw["priorities"]):
         raise ValueError("Пустой шаг в порядке исправлений")
@@ -627,6 +629,11 @@ def _set_result(raw, claims, blocks, required, references, signals=(), verified_
             paths.extend(f"/findings/{i}" for i, entry in checked.items() if capacity_linked(pair, entry))
             paths.extend(f"/resolved/{i}" for i, entry in enumerate(raw["resolved"])
                          if entry["id"] in pair["limit_ids"] + pair["instance_ids"])
+    for pair in scheduled:
+        if command_rules.missing_conflict(pair, findings):
+            errors.append(command_rules.diagnosis(pair))
+            paths.extend(["/findings/-", "/priorities/-"])
+            paths.extend(f"/findings/{i}" for i, entry in checked.items() if command_rules.linked(pair, entry))
     for signal in signals:
         ids = set(signal["claims"])
         if not ids or grouped_in(signal, findings):
@@ -781,7 +788,10 @@ def _check_question(d, f, source_quotes):
                 raise DraftError("Для каждой трактовки нужна дословная опора из её собственного утверждения", path)
     elif readings:
         raise DraftError("reading_support предназначен только для двух трактовок оставленной неоднозначности", path)
-    if needs_check and not ambiguous:
+    if not ambiguous and missing_transition_result(f, check, source_quotes):
+        f["category"] = "Полнота"
+        check = dict(check, state="не задан результат действия")
+    elif needs_check and not ambiguous:
         if (state in {"открытый выбор", "не задан результат действия", "неполный приёмочный сценарий",
                       "не определено значение термина"}
                 and _asks_about_input_class(f["question"], source_quotes[obligation])):
@@ -871,7 +881,8 @@ def _adjudicate_one(d, original, source_quotes=None):
     return f
 
 
-def _final_decisions(raw, candidates, claims, signals=(), verified_refs=(), capacities=(), unbound_examples=None):
+def _final_decisions(raw, candidates, claims, signals=(), verified_refs=(), capacities=(), unbound_examples=None,
+                     scheduled=()):
     _nonempty(raw, "assessment", "readiness")
     originals = {f["id"]: f for f in candidates}
     source_quotes = {c["id"]: c["quote"] for c in claims}
@@ -942,6 +953,11 @@ def _final_decisions(raw, candidates, claims, signals=(), verified_refs=(), capa
         if rejected:
             errors.append(capacity_diagnosis(pair))
             paths.extend(f"/decisions/{i}" for i in rejected)
+    for pair in scheduled:
+        if command_rules.missing_conflict(pair, kept):
+            errors.append(command_rules.diagnosis(pair))
+            paths.extend(f"/decisions/{i}" for i, d in enumerate(raw["decisions"])
+                         if d["id"] in originals and command_rules.linked(pair, originals[d["id"]]))
     for signal in signals:
         if signal["type"] != "unit_scale" or signal["qualified"] or grouped_in(signal, kept):
             continue
@@ -1061,6 +1077,10 @@ def review(document, provider, progress=lambda msg: None):
     if capacities:
         payload["capacity_pairs"] = capacities
         instructions += "\n" + CAPACITY_INSTRUCTION
+    scheduled = command_rules.scheduled_command_pairs(claims)
+    if scheduled:
+        payload["scheduled_command_rules"] = scheduled
+        instructions += "\n" + command_rules.INSTRUCTION
     boundaries = source_boundaries(document.blocks)
     if boundaries:
         payload["source_boundaries"] = boundaries
@@ -1073,7 +1093,7 @@ def review(document, provider, progress=lambda msg: None):
     candidates, resolved, trace_review = _request(
         provider, SYNTHESIZE + instructions, payload, GLOBAL,
         lambda data: _set_result(data, claims, blocks, required, references, signals, verified_refs, boundaries,
-                                 capacities), progress)
+                                 capacities, scheduled), progress)
     stage("adjudication")
     progress(f"Независимая проверка оснований и вопросов по всему источнику: замечаний {len(candidates)}.")
     fixed = [f for f in candidates if f.get("missing_target")]
@@ -1087,6 +1107,8 @@ def review(document, provider, progress=lambda msg: None):
         audit_payload["source_boundaries"] = boundaries
     if capacities:
         audit_payload["capacity_pairs"] = capacities
+    if scheduled:
+        audit_payload["scheduled_command_rules"] = scheduled
     if scopes := candidate_scopes(candidates):
         audit_payload["question_scopes"] = scopes
         if not check_scope:
@@ -1098,7 +1120,7 @@ def review(document, provider, progress=lambda msg: None):
     findings, notes, set_review = _request(provider, ADJUDICATE + instructions,
                                           audit_payload, AUDIT,
                                           lambda data: _final_decisions(data, candidates, claims, signals, fixed,
-                                                                        capacities, unbound_examples), progress)
+                                                                        capacities, unbound_examples, scheduled), progress)
     stage("validation")
     for claim in claims:
         ident = claim["id"]
