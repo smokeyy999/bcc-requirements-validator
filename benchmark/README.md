@@ -21,11 +21,11 @@ python -m scripts.evaluate --repeat 3 --jobs 1 --resume --runs-dir .tmp/live/ben
 
 При достаточной квоте Codex можно передать `--jobs 2`. Тогда в каждом дочернем процессе извлечение идёт в один поток. Для отдельной отладки доступна команда `python -m scripts.evaluate --split dev --repeat 1 --runs-dir .tmp/dev-stage/runs --output .tmp/dev/evaluation.md`.
 
-По окончании в `reports/local/` появятся оценка, разбор незачтённых карточек и каталог `benchmark-runs/` с индивидуальными отчётами и паспортами. Первая команда ниже повторяет оценку итоговой версии, вторая — три прохода до последнего исправления. Обе читают сохранённые отчёты без запросов к модели.
+По окончании в `reports/local/` появятся оценка, разбор незачтённых карточек и каталог `benchmark-runs/` с индивидуальными отчётами и паспортами. Первая команда ниже повторяет три прохода версии `bf920eb`, вторая — предыдущий замер версии `9869df2`. Обе читают сохранённые отчёты без запросов к модели.
 
 ```sh
-python -m scripts.evaluate --import-dir reports/submission/benchmark-runs --repeat 1 --output .tmp/final/evaluation.md
-python -m scripts.evaluate --import-dir reports/jury/benchmark-runs --repeat 3 --output .tmp/previous/evaluation.md
+python -m scripts.evaluate --import-dir reports/final/benchmark-runs --repeat 3 --output .tmp/final/evaluation.md
+python -m scripts.evaluate --import-dir reports/submission/benchmark-runs --repeat 1 --output .tmp/previous/evaluation.md
 ```
 
 Для импорта нужен файл `<каталог>/<case>/r<N>/report.md` на каждую пару документа и повтора. ID документов: `dispatch`, `dispatch-base`, `irrigation`, `irrigation-base`, `subtitles`, `subtitles-base`, `indicator`. Для каждой исходной версии используется суффикс `-base`. Файл `report/run-meta.json` рядом с отчётом содержит метрики. Перед вызовами модели оценщик проверяет чистоту клона и возможность перенести отчёты из `.tmp/benchmark-runs/` в `reports/benchmark-runs/` с сохранением относительных ссылок на вход. После переноса он повторно проверяет паспорт, SHA-256 отчёта и вложенную ссылку на документ. При импорте исторических отчётов без полных метрик оценка явно помечается как диагностическая.
