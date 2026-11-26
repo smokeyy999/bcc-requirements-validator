@@ -30,6 +30,9 @@ def reply(data):
 class ProviderTests(unittest.TestCase):
     def setUp(self):
         self.gemini = api.Gemini("fixture-secret", "fixture-model")
+        pacing = patch.object(self.gemini, "_pace")
+        pacing.start()
+        self.addCleanup(pacing.stop)
 
     def test_gemini_checks_catalog_and_records_version(self):
         pages = [
@@ -74,6 +77,31 @@ class ProviderTests(unittest.TestCase):
         date = datetime(1970, 1, 1, tzinfo=timezone.utc)
         self.assertEqual(api._retry_after(format_datetime(date, usegmt=True)), 0)
 
+    def test_google_quota_details_distinguish_zero_daily_and_short_retry(self):
+        def details(*records):
+            return json.dumps({"error": {"details": list(records)}})
+        retry = {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "2.25s"}
+        for violation in [{"quotaId": "GenerateContentRequestsPerDayPerProjectPerModel-FreeTier"},
+                          {"quotaMetric": "generate_content_free_tier_requests", "quotaValue": "0"}]:
+            payload = details({"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [violation]}, retry)
+            with patch.object(api.request, "urlopen", side_effect=http_error(429, payload)) as send:
+                with self.assertRaisesRegex(api.ProviderError, "квота"):
+                    self.gemini._request("models")
+                self.assertEqual(send.call_count, 1)
+        with patch.object(api.request, "urlopen", side_effect=[http_error(429, details(retry)), reply({})]), \
+                patch.object(api.time, "sleep") as wait:
+            self.gemini._request("models")
+            wait.assert_called_once_with(2.25)
+
+    def test_incomplete_answer_retries_once_with_original_schema_and_full_prompt(self):
+        responses = [reply({"candidates": [{"finishReason": "MAX_TOKENS"}]}),
+                     reply({"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": '{"answer":"READY"}'}]}}]})]
+        with patch.object(api.request, "urlopen", side_effect=responses) as send:
+            self.assertEqual(self.gemini.ask(api.PROBE_PROMPT, api.PROBE_SCHEMA), {"answer": "READY"})
+            first, second = [json.loads(call.args[0].data) for call in send.call_args_list]
+            self.assertEqual(first["generationConfig"], second["generationConfig"])
+            self.assertTrue(second["contents"][0]["parts"][0]["text"].startswith(api.PROBE_PROMPT))
+
     def test_long_retry_after_exits_before_another_request(self):
         with patch.object(api.request, "urlopen", side_effect=http_error(503, "", "120")) as send:
             with self.assertRaisesRegex(api.ProviderError, "120"):
@@ -94,7 +122,7 @@ class ProviderTests(unittest.TestCase):
             {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": '{"a":1,"a":2}'}]}}]},
             {"candidates": []},
         ]:
-            with self.subTest(response=response), patch.object(api.request, "urlopen", return_value=reply(response)):
+            with self.subTest(response=response), patch.object(api.request, "urlopen", side_effect=lambda *a, **kw: reply(response)):
                 with self.assertRaises(api.ProviderError):
                     self.gemini.ask("Вопрос", api.PROBE_SCHEMA)
 

@@ -1,0 +1,7 @@
+{
+  "id": "indicator",
+  "split": "test",
+  "title": "Индикатор выключателя",
+  "source": "requirements.md",
+  "seeds": []
+}

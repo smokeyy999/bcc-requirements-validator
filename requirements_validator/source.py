@@ -218,9 +218,11 @@ def read_document(path: Path) -> Document:
     if not path.is_file():
         raise ValueError(f"Входной файл не найден. Проверьте путь: {path}")
     ext = path.suffix.casefold()
-    if ext not in {".md", ".markdown", ".pdf"}:
-        raise ValueError("Неподдерживаемый формат. Передайте Markdown (.md, .markdown) или PDF.")
+    if ext not in {".md", ".markdown", ".pdf", ".docx"}:
+        raise ValueError("Неподдерживаемый формат. Передайте Markdown (.md, .markdown), PDF или DOCX.")
     try:
+        if ext == ".docx" and path.stat().st_size > 64 * 1024 * 1024:
+            raise ValueError("Файл DOCX превышает 64 МиБ. Сохраните текстовую копию без крупных вложений.")
         data = path.read_bytes()
     except OSError as exc:
         raise ValueError("Не удалось прочитать файл. Проверьте права доступа.") from exc
@@ -228,6 +230,12 @@ def read_document(path: Path) -> Document:
         raise ValueError("Входной файл пуст. Выберите заполненный документ.")
     digest = hashlib.sha256(data).hexdigest()
     pdf_title = ""
+    if ext == ".docx":
+        from .docx_source import index_docx
+        title, blocks = index_docx(data)
+        if not blocks:
+            raise ValueError("В DOCX нет текста для анализа. Для скана выполните OCR и сохраните текст в документе.")
+        return Document(title or path.stem, digest, tuple(blocks))
     if ext == ".pdf":
         pages, pdf_title, heading_maps = _pdf_pages(data)
     else:

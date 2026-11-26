@@ -2,8 +2,11 @@
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from copy import deepcopy
 
+from .metrics import purpose, stage
 from .prompts import ADJUDICATE, EXTRACT, SYNTHESIZE
 
 
@@ -168,7 +171,8 @@ def _request(provider, instruction, payload, schema, parse, progress):
         # Невалидная структура не может задавать безопасные пути для исправления.
         summary = str(error)
         progress(f"Структура ответа отклонена: {summary[:500]}. Запрошен один повтор.")
-        repaired = provider.ask(prompt + "\n\nИсправь структуру ответа: " + summary, schema)
+        with purpose("schema_retry"):
+            repaired = provider.ask(prompt + "\n\nИсправь структуру ответа: " + summary, schema)
     else:
         try:
             return parse(draft)
@@ -190,7 +194,8 @@ def _request(provider, instruction, payload, schema, parse, progress):
                 "input": payload, "draft": draft, "errors": summary, "allowed_paths": allowed,
                 "schema": schema,
             }))
-        changes = provider.ask(fix_prompt, PATCH)
+        with purpose("validation_patch"):
+            changes = provider.ask(fix_prompt, PATCH)
         try:
             repaired = _apply_patch(draft, schema, changes, allowed)
         except ValueError as error:
@@ -283,7 +288,8 @@ def _local_review(provider, batch, all_blocks, progress):
     accepted = {}
     targets = batch
     for attempt in range(2):
-        result = provider.ask(EXTRACT + "\n\nВход (JSON):\n" + compact(payload), LOCAL)
+        with purpose("block_retry" if attempt else "initial"):
+            result = provider.ask(EXTRACT + "\n\nВход (JSON):\n" + compact(payload), LOCAL)
         valid, errors, outside = _local_parts(result, targets)
         accepted.update(valid)
         if outside:
@@ -347,6 +353,7 @@ def _finding(raw, by_id, blocks, references):
     if raw["category"] == "Противоречивость" and raw["kind"] == "Дефект" and len(ids) < 2:
         raise ValueError("Для противоречия нужны две стороны с разными ID утверждений")
     interpretations = []
+    proposal_anchors = []
     alternatives = raw["interpretations"]
     if raw["kind"] == "Неоднозначность":
         if len(alternatives) != 2:
@@ -358,6 +365,7 @@ def _finding(raw, by_id, blocks, references):
                 raise ValueError("Трактовка привязана к постороннему требованию")
             if anchor not in evidence:
                 evidence.append(anchor)
+            proposal_anchors.append(anchor)
             interpretations.append(f"{alternative['reading']} → {alternative['effect']} "
                                    f"({anchor['id']}, «{anchor['quote']}»)")
         if any(_canon(alternatives[0][k]) == _canon(alternatives[1][k])
@@ -376,6 +384,7 @@ def _finding(raw, by_id, blocks, references):
     if ref and ref not in references:
         raise ValueError("Нормативное основание отсутствует в справочнике этого прогона")
     return dict(raw, reference=references.get(ref), ids=ids, evidence=evidence, interpretations=interpretations,
+                proposal_anchors=proposal_anchors,
                 counted=raw["kind"] in {"Дефект", "Неоднозначность"})
 
 
@@ -528,7 +537,7 @@ def _adjudicate_one(d, original):
         f.update(kind="Предполагаемый пробел", category="Полнота", counted=False,
                  ids=sorted(kept_ids), evidence=[a for a in original["evidence"] if a["id"] in kept_ids],
                  topic=f["question"], scenario=f["test"], consequence=d["reason"], interpretations=[], fix="",
-                 reference=None)
+                 reference=None, proposal_anchors=[])
     if f["counted"] and not direct:
         raise ValueError("Подтверждённое нарушение требует прямого основания в документе")
     if f["kind"] == "Рекомендация" and f["blocking"]:
@@ -633,12 +642,23 @@ def review(document, provider, progress=lambda msg: None):
     blocks = {b.id: b for b in document.blocks}
     if len(blocks) != len(document.blocks) or not blocks:
         raise ValueError("Источник должен содержать блоки с уникальными ID")
-    claims, context = [], []
-    for number, batch in enumerate(_batches(document.blocks), 1):
+    def extract(number, batch):
         progress(f"Выделение и оценка утверждений: пакет {number}, блоков {len(batch)}.")
-        rows, ignored = _local_review(provider, batch, document.blocks, progress)
+        return _local_review(provider, batch, document.blocks, progress)
+
+    stage("extract")
+    batches = enumerate(_batches(document.blocks), 1)
+    if getattr(provider, "extract_workers", 1) == 2:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            jobs = [executor.submit(copy_context().run, extract, n, batch) for n, batch in batches]
+            extracted = [job.result() for job in jobs]  # сохраняем исходный порядок блоков
+    else:
+        extracted = [extract(n, batch) for n, batch in batches]
+    claims, context = [], []
+    for rows, ignored in extracted:
         claims.extend(rows)
         context.extend(ignored)
+    stage("cross_review")
     progress(f"Сквозная проверка всего документа: утверждений {len(claims)}.")
     index = [{k: c[k] for k in ("id", "block", "quote", "summary", "assessment", "status")} for c in claims]
     required, references = _trace_scope(claims, blocks)
@@ -647,12 +667,14 @@ def review(document, provider, progress=lambda msg: None):
     candidates, resolved, trace_review = _request(
         provider, SYNTHESIZE, payload, GLOBAL,
         lambda data: _set_result(data, claims, blocks, required, references), progress)
+    stage("adjudication")
     progress(f"Независимая проверка оснований и вопросов по всему источнику: замечаний {len(candidates)}.")
     audit_payload = {"blocks": payload["blocks"], "candidates": [_audit_candidate(f) for f in candidates],
                      "trace_review": trace_review,
                      "claims": [{k: c[k] for k in ("id", "block", "summary")} for c in claims]}
     findings, notes, set_review = _request(provider, ADJUDICATE, audit_payload, AUDIT,
                                            lambda data: _final_decisions(data, candidates, claims), progress)
+    stage("validation")
     for claim in claims:
         links = [f for f in findings if claim["id"] in f["ids"]]
         claim["findings"] = [f["id"] for f in links]

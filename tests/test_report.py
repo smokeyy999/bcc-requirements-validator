@@ -2,11 +2,25 @@
 import unittest
 from pathlib import Path
 
-from requirements_validator.report import render
+from requirements_validator.report import author_proposal, render
 from requirements_validator.source import read_document
 
 
 class ReferenceRenderingTest(unittest.TestCase):
+    def test_each_proposed_choice_retains_its_own_verified_clause(self):
+        a = {'id': 'R-M0001-01', 'quote': 'При окончании смены дверь закрывается.'}
+        b = {'id': 'R-M0003-01', 'quote': 'При окончании смены дверь остаётся открытой.'}
+        f = dict(counted=True, evidence=[a, b], ids=[a['id'], b['id']], proposal_anchors=[a, b],
+                 fix='Закрыть через шесть часов.', scenario='Окончание смены.', test='Проверить положение двери.')
+        result = '\n'.join(author_proposal(f))
+        for anchor in (a,b):
+            self.assertIn(anchor['quote'], result)
+        self.assertIn(f['test'], result)
+        self.assertNotIn(f['fix'], result)
+        f['proposal_anchors'] = [dict(a, quote='Несогласованный срок')]
+        with self.assertRaises(ValueError):
+            author_proposal(f)
+
     def test_external_rule_is_separate_from_the_document_quote(self):
         source = Path(__file__).parent / "fixtures" / "locker.md"
         doc = read_document(source)

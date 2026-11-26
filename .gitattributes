@@ -1,2 +1,4 @@
 * text=auto eol=lf
 docs/requirements.md -text
+*.pdf binary
+*.docx binary
