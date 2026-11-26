@@ -39,6 +39,60 @@ class QuestionCategoryTests(unittest.TestCase):
         self.check["outcomes"] = ["Замер проходит по заданной границе.", "Тот же замер вне принятой границы."]
         self.assertEqual(self.reviewed()["category"], "Проверяемость")
 
+    def test_ambiguity_verifies_each_reading_and_rejects_an_unwritten_conversion(self):
+        quote = "Пульт принимает одиночную заглавную букву от A до F."
+        self.rule["quote"] = quote
+        self.item.update(kind="Неоднозначность", category="Однозначность",
+                         question="Нужно ли принимать строчную букву?",
+                         proposal_options=[dict(anchor=self.rule, reading="Сверить регистр.", effect="Отказ."),
+                                           dict(anchor=self.rule, reading="Изменить регистр.", effect="Допуск.")])
+        case = dict(status="подтверждено", condition="В пульт введена строчная буква.",
+                    anchors=[self.rule], effect="")
+        self.check.update(state="открытый выбор", known_answer=quote, decision=self.item["question"],
+                          outcomes=["Буква отклонена.", "Буква принята."])
+        first = dict(id=self.rule["id"], quote="заглавную букву", support="опора в тексте")
+        converted = dict(id=self.rule["id"], quote="заглавную букву", support="требуется допущение")
+        for options in ([], [first, converted], [first, dict(first, quote="букву переводят в верхний регистр")]):
+            with self.subTest(options=options), self.assertRaisesRegex(ValueError, "трактов"):
+                self.reviewed(case_check=case, question_check=[dict(self.check, reading_support=options)])
+
+        self.rule["quote"] = "Включают красные и синие лампы с отметкой."
+        self.item.update(question="Нужна ли отметка у красной лампы?",
+                         proposal_options=[dict(anchor=self.rule, reading="Отметка для синих.", effect="Включена."),
+                                           dict(anchor=self.rule, reading="Отметка для всех.", effect="Выключена.")])
+        self.check.update(known_answer=self.rule["quote"], decision=self.item["question"],
+                          outcomes=["Красная без отметки горит.", "Красная без отметки погашена."])
+        both = dict(id=self.rule["id"], quote="красные и синие лампы с отметкой", support="опора в тексте")
+        case.update(condition="Проверяют красную лампу без отметки.")
+        result = self.reviewed(case_check=case, question_check=[dict(self.check, reading_support=[both, both])])
+        self.assertTrue(result["counted"])
+        self.assertEqual(result["category"], "Однозначность")
+
+    def test_removed_question_without_a_fix_explains_the_repair_modes(self):
+        with self.assertRaisesRegex(ValueError, "question_mode.*сохранить.*заменить.*question.*test"):
+            self.reviewed(question_mode="убрать", question_check=[])
+
+    def test_downgrade_distinguishes_a_missing_definition_from_an_unspecified_action_result(self):
+        examples = [
+            ("В зал передают премьерные куклы.", "Как мастер распознаёт премьерную куклу?",
+             "Кукла передана в зал.", "Кукла осталась в мастерской.", "не определено значение термина", "Ясность"),
+            ("По команде смены декорации подъёмник перемещает занавес.", "Где должен остановиться занавес?",
+             "Занавес полностью поднят.", "Занавес остаётся на промежуточной отметке.",
+             "не задан результат действия", "Полнота")]
+        self.item.update(kind="Неоднозначность", category="Однозначность", counted=True)
+        for quote, question, a, b, state, category in examples:
+            self.rule["quote"] = quote
+            case = dict(status="подтверждено", condition="Проверяется предусмотренная операция.",
+                        anchors=[self.rule], effect="")
+            check = checked_question(self.rule["id"], quote, question, a, b, state)
+            with self.subTest(state=state):
+                reviewed = self.reviewed(action="уточнить", question_mode="заменить",
+                    question=question, test="Выполнить операцию и проверить результат.",
+                    blocking=False, basis="Обоснованное ожидание", supports=[self.rule["id"]],
+                    case_check=case, question_check=check)
+                self.assertEqual((reviewed["kind"], reviewed["category"]), ("Предполагаемый пробел", category))
+                self.assertFalse(reviewed["counted"] or reviewed["blocking"])
+
     def test_open_question_requires_a_sourced_independent_decision_and_different_outcomes(self):
         self.item.update(kind="Предполагаемый пробел", counted=False)
         with self.assertRaisesRegex(ValueError, "проверка вопроса"):

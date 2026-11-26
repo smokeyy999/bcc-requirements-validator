@@ -12,7 +12,7 @@ from requirements_validator.report import author_proposal
 
 def checked_question(ident, known, decision, first, second, state="открытый выбор"):
     return [dict(state=state, obligation_id=ident, checked_ids=[ident], known_answer=known,
-                 decision=decision, outcomes=[first, second])]
+                 decision=decision, outcomes=[first, second], reading_support=[])]
 
 
 def agreed_audit():
@@ -449,7 +449,13 @@ class TestReview(unittest.TestCase):
                                                 quote="", reading="Свободная отмена", effect="Удержание нулевое"),
                                            dict(self.issue["evidence"][1],
                                                 reading="Платная отмена", effect="Есть списание")])
-        result = review(self.document, Responses(self.local, self.whole))
+        audit = agreed_audit()
+        check = checked_question("R-M01-01", self.first, self.issue["question"],
+                                 "Удержание нулевое.", "Есть списание.")[0]
+        check["reading_support"] = [dict(id=row["id"], quote=row["quote"], support="опора в тексте")
+                                    for row in self.issue["evidence"]]
+        audit["decisions"][0]["question_check"] = [check]
+        result = review(self.document, Responses(self.local, self.whole, audits=[audit]))
         self.assertEqual((result["counts"]["defects"], result["counts"]["ambiguities"]), (1, 1))
         self.assertIn("R-M02-01", result["findings"][0]["interpretations"][1])
         self.assertIn(self.first, result["findings"][0]["interpretations"][0])

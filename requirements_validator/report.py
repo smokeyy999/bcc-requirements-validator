@@ -92,7 +92,9 @@ def author_proposal(finding):
         return []
     evidence = finding["evidence"]
     test = plain(finding.get("test") or finding["scenario"])
-    result = ["**Предложение для автора.** Предложение модели. Выбор формулировки и ожидаемого результата утверждает автор ТЗ."]
+    origin = ("Проверка ссылок по индексу исходного документа." if finding.get("missing_target")
+              else "Предложение модели.")
+    result = [f"**Предложение для автора.** {origin} Выбор формулировки и ожидаемого результата утверждает автор ТЗ."]
     options = finding.get("proposal_options", [])
     if finding.get("question"):
         result.append("**Вопрос для решения.** " + plain(finding["question"]))
