@@ -6,7 +6,7 @@ import unittest
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from requirements_validator.engine import AUDIT, GLOBAL, LOCAL, PATCH, review
+from requirements_validator.engine import AUDIT, GLOBAL, LOCAL, OPERATION, PATCH, VALUE, review
 
 
 def agreed_audit():
@@ -54,7 +54,7 @@ class TestReview(unittest.TestCase):
         self.local = {
             "claims": [
                 {"block": block, "quote": quote, "summary": quote, "assessment": check,
-                 "status": "проверяемо"}
+                 "status": "проверяемо", "trace": "локально"}
                 for block, quote, check in (
                     ("M01", self.second, "Проверить заявленную вместимость."),
                     ("M01", self.first, "Проверить сумму удержания."),
@@ -71,10 +71,12 @@ class TestReview(unittest.TestCase):
             "evidence": [{"id": "R-M01-01", "quote": self.first},
                          {"id": "R-M02-01", "quote": self.third}],
             "interpretations": [], "question": "Удерживать плату за отмену за сутки?",
-            "test": "Отмена за сутки до начала.", "blocking": True, "fix": "",
+            "test": "Отмена за сутки до начала.", "blocking": True, "fix": "", "reference": "",
         }
         self.whole = {
-            "findings": [self.issue], "resolved": [],
+            "findings": [self.issue], "resolved": [], "traces": [],
+            "scope": {"operations": "R-M01-01 — правило об оплате, без стандартизованного интерфейса.",
+                      "values": "R-M01-02 — фиксированная вместимость зала."},
             "assessment": "Правила отмены описывают разные списания.",
             "readiness": "Тест списания при отмене требует решения владельца.",
             "priorities": ["Согласовать плату при отмене за сутки."],
@@ -101,6 +103,63 @@ class TestReview(unittest.TestCase):
         self.assertNotIn("карта", json.dumps(result, ensure_ascii=False).lower())
         self.assertEqual([schema for _, schema in provider.calls], [LOCAL, GLOBAL, AUDIT])
         self.assertIn(self.blocks[-1].text, provider.calls[-1][0])
+
+    def test_separate_standard_reference_for_requested_operation_effect(self):
+        method = "Клиент вызывает стандартный HTTP HEAD /reserve."
+        effect = "Операция по запросу клиента оформляет новую бронь."
+        self.blocks[0].text = method
+        self.blocks[1].text = effect
+        self.local["claims"] = [
+            dict(self.local["claims"][0], block=b.id, quote=b.text, summary=b.text, trace="локально")
+            for b in self.blocks[:2]
+        ]
+        self.issue.update(topic="Семантика бронирования", reference="safe",
+                          reason="Выбранная операция несовместима с намерением оформить бронь.",
+                          evidence=[{"id": "R-M01-01", "quote": method}, {"id": "R-M02-01", "quote": effect}])
+        self.whole["scope"]["values"] = "R-M02-01 — действие оформления."
+        with self.assertRaisesRegex(ValueError, "Нет трассы"):
+            review(self.document, Responses(self.local, self.whole, self.whole))
+        self.whole["traces"] = [
+            dict(aspect=OPERATION, subjects=["R-M01-01"], supports=["R-M02-01"],
+                 reasoning="Клиент требует создания брони.", finding_topic=self.issue["topic"])]
+        provider = Responses(self.local, self.whole)
+        result = review(self.document, provider)
+        ref = result["findings"][0]["reference"]
+        self.assertEqual(ref["url"], "https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.1")
+        self.assertEqual([ev["quote"] for ev in result["findings"][0]["evidence"]], [method, effect])
+        self.assertIn(ref["rule"], provider.calls[-1][0])
+
+    def test_only_applicable_protocol_can_supply_a_reference(self):
+        self.issue["reference"] = "safe"
+        with self.assertRaisesRegex(ValueError, "отсутствует в справочнике"):
+            review(self.document, Responses(self.local, self.whole, self.whole))
+
+    def test_value_trace_requires_actual_provider_or_a_linked_question(self):
+        self.blocks[0].text = "Терминал показывает число гостей в зале."
+        self.local["claims"] = [
+            dict(self.local["claims"][0], block=b.id, quote=b.text, summary=b.text,
+                 trace=VALUE if i == 0 else "локально")
+            for i, b in enumerate(self.blocks[:2])
+        ]
+        self.issue.update(kind="Предполагаемый пробел", category="Трассируемость",
+                          topic="Источник числа гостей", evidence=[{"id": "R-M01-01", "quote": ""}],
+                          question="Откуда терминал узнаёт число гостей?", test="Сверка при входе гостя.")
+        trace = dict(aspect=VALUE, subjects=["R-M01-01"], supports=[],
+                     reasoning="Терминалу нужны сведения о посетителях.", finding_topic="")
+        self.whole["traces"] = [trace]
+        for wrong_topic in ("", "Другая тема"):
+            trace["finding_topic"] = wrong_topic
+            with self.subTest(wrong_topic=wrong_topic), self.assertRaisesRegex(ValueError, "/traces/0"):
+                review(self.document, Responses(self.local, self.whole, self.whole))
+        trace["finding_topic"] = self.issue["topic"]
+        result = review(self.document, Responses(self.local, self.whole))
+        self.assertEqual(result["counts"]["gaps"], 1)
+        self.assertEqual(result["counts"]["defects"], 0)
+
+    def test_empty_scope_requires_grounded_explanation_even_with_local_labels_empty(self):
+        self.whole["scope"]["values"] = "Проверка не требуется."
+        with self.assertRaisesRegex(ValueError, "/scope/values"):
+            review(self.document, Responses(self.local, self.whole, self.whole))
 
     def test_missing_block_retried_alone_with_read_only_neighbours(self):
         bad = dict(self.local, context=[])

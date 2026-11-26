@@ -85,6 +85,10 @@ def render(doc, result, run, source_path, output_path):
                       "Затронутые утверждения — " + refs(f["ids"]) + "."])
         for ev in f["evidence"]:
             parts.append(f'{refs([ev["id"]])} · {evidence(ev)}')
+        reference = f.get("reference")
+        if reference:
+            parts.append(f'**Внешнее основание.** {plain(reference["rule"])} '
+                         f'[{plain(reference["title"])}]({reference["url"]})')
         for field, label in (("scenario", "Сценарий"), ("consequence", "Последствие")):
             if f[field]:
                 parts.append(f'**{label}.** {plain(f[field])}')

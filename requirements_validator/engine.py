@@ -22,8 +22,28 @@ def enum(*values):
 
 STR = {"type": "string"}
 BOOL = {"type": "boolean"}
+OPERATION = "семантика операции"
+VALUE = "источник значения"
+HTTP_METHODS = re.compile(r"\b(?:GET|HEAD|POST|PUT|DELETE|CONNECT|OPTIONS|TRACE)\b")
+HTTP_REFERENCES = {
+    "safe": {
+        "title": "RFC 9110 § 9.2.1 · Safe Methods",
+        "url": "https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.1",
+        "rule": "Безопасная операция не запрашивает изменение состояния ресурса. "
+                "В HTTP к безопасным относятся GET, HEAD, OPTIONS и TRACE. "
+                "Побочные действия сервера, которых клиент не запрашивал, сами по себе допустимы.",
+    },
+    "idempotent": {
+        "title": "RFC 9110 § 9.2.2 · Idempotent Methods",
+        "url": "https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2",
+        "rule": "Для идемпотентной операции несколько одинаковых запросов имеют тот же "
+                "предусмотренный эффект, что и один. Это свойство определено для безопасных "
+                "методов HTTP, PUT и DELETE. Ответы могут различаться.",
+    },
+}
 LOCAL = obj(
     claims=array(obj(block=STR, quote=STR, summary=STR, assessment=STR,
+                     trace=enum("локально", OPERATION, VALUE, "оба"),
                      status=enum("проверяемо", "проверить", "недостаточно данных"))),
     context=array(obj(block=STR, role=enum("метаданные", "контекст", "шаблон", "оформление"))),
 )
@@ -34,9 +54,12 @@ FINDING = obj(
     severity=enum("Критичная", "Существенная", "Низкая"), reason=STR, scenario=STR,
     consequence=STR, evidence=array(obj(id=STR, quote=STR)),
     interpretations=array(obj(id=STR, quote=STR, reading=STR, effect=STR)),
-    question=STR, test=STR, blocking=BOOL, fix=STR,
+    question=STR, test=STR, blocking=BOOL, fix=STR, reference=enum("", *HTTP_REFERENCES),
 )
+TRACE = obj(aspect=enum(OPERATION, VALUE), subjects=array(STR), supports=array(STR),
+            reasoning=STR, finding_topic=STR)
 GLOBAL = obj(findings=array(FINDING), resolved=array(obj(id=STR, reason=STR)),
+             traces=array(TRACE), scope=obj(operations=STR, values=STR),
              assessment=STR, readiness=STR, priorities=array(STR))
 DECISION = obj(id=STR, action=enum("оставить", "снять", "уточнить"),
                basis=enum("Прямое обязательство", "Обоснованное ожидание", "Решение команды", "Вне требований"),
@@ -311,7 +334,7 @@ def _evidence(item, by_id, blocks):
             "location": block.location}
 
 
-def _finding(raw, by_id, blocks):
+def _finding(raw, by_id, blocks, references):
     _nonempty(raw, "topic", "reason", "scenario", "consequence")
     evidence = []
     for item in raw["evidence"]:
@@ -349,7 +372,10 @@ def _finding(raw, by_id, blocks):
         raise ValueError("Для открытого бизнес-решения нужен вопрос и зависящий от него тест")
     if raw["kind"] == "Дефект" and not (has_question or raw["fix"].strip()):
         raise ValueError("Для дефекта нужен вопрос или обоснованное исправление")
-    return dict(raw, ids=ids, evidence=evidence, interpretations=interpretations,
+    ref = raw["reference"]
+    if ref and ref not in references:
+        raise ValueError("Нормативное основание отсутствует в справочнике этого прогона")
+    return dict(raw, reference=references.get(ref), ids=ids, evidence=evidence, interpretations=interpretations,
                 counted=raw["kind"] in {"Дефект", "Неоднозначность"})
 
 
@@ -366,6 +392,7 @@ def _merge(findings):
             same_topic = _canon(previous["topic"]) == _canon(finding["topic"])
             same_case = _canon(previous["scenario"]) == _canon(finding["scenario"])
             if (previous["kind"] == finding["kind"] and previous["category"] == finding["category"]
+                    and previous["reference"] == finding["reference"]
                     and anchors & other and (same_topic or (anchors == other and same_case))):
                 previous["ids"] = sorted(set(previous["ids"]) | set(finding["ids"]))
                 previous["evidence"].extend(a for a in finding["evidence"] if a not in previous["evidence"])
@@ -383,7 +410,48 @@ def _merge(findings):
     return unique
 
 
-def _set_result(raw, claims, blocks):
+def _trace_scope(claims, blocks):
+    source_text = "\n".join(b.section + "\n" + b.text for b in blocks.values())
+    uses_http = re.search(r"\b(?:HTTP(?:S)?|REST(?:ful)?)\b", source_text, re.I) is not None
+    required = {OPERATION: [], VALUE: []}
+    for claim in claims:
+        if claim["trace"] in (OPERATION, "оба") or (uses_http and HTTP_METHODS.search(claim["quote"])):
+            required[OPERATION].append(claim["id"])
+        if claim["trace"] in (VALUE, "оба"):
+            required[VALUE].append(claim["id"])
+    return required, HTTP_REFERENCES if uses_http else {}
+
+
+def _check_traces(raw, by_id, required, findings):
+    _nonempty(raw["scope"], "operations", "values")
+    topics = {f["topic"]: set(f["ids"]) for f in findings}
+    seen, errors, paths = set(), [], []
+    for i, trace in enumerate(raw["traces"]):
+        subjects, supports = set(trace["subjects"]), set(trace["supports"])
+        keys = {(trace["aspect"], ident) for ident in subjects}
+        topic = trace["finding_topic"]
+        if (not subjects or not trace["reasoning"].strip() or not (subjects | supports) <= by_id.keys()
+                or keys & seen or (topic and not subjects <= topics.get(topic, set()))
+                or (not topic and not supports)):
+            errors.append(f"/traces/{i}: проверь ID, обоснование, повтор трассы и связь с topic/evidence")
+            paths.extend([f"/traces/{i}", "/findings/-"])
+        else:
+            seen.update(keys)
+    for aspect, field in ((OPERATION, "operations"), (VALUE, "values")):
+        ids = required[aspect]
+        missing = [ident for ident in ids if (aspect, ident) not in seen]
+        if missing:
+            errors.append(f"Нет трассы «{aspect}» для: {', '.join(missing)}")
+            paths.extend(["/traces/-", "/findings/-"])
+        if not ids and not any(key[0] == aspect for key in seen) and by_id:
+            note_refs = set(re.findall(r"\bR-\w+-\d+\b", raw["scope"][field]))
+            if not note_refs or not note_refs <= by_id.keys():
+                errors.append(f"/scope/{field}: объясни неприменимость по существующему ID либо дай трассу")
+                paths.extend([f"/scope/{field}", "/traces/-", "/findings/-"])
+    return errors, paths
+
+
+def _set_result(raw, claims, blocks, required, references):
     _nonempty(raw, "assessment", "readiness")
     if any(not step.strip() for step in raw["priorities"]):
         raise ValueError("Пустой шаг в порядке исправлений")
@@ -391,10 +459,13 @@ def _set_result(raw, claims, blocks):
     checked, errors, paths = [], [], []
     for i, finding in enumerate(raw["findings"]):
         try:
-            checked.append(_finding(finding, by_id, blocks))
+            checked.append(_finding(finding, by_id, blocks, references))
         except ValueError as error:
             errors.append(f"/findings/{i}: {error}")
             paths.append(f"/findings/{i}")
+    trace_errors, trace_paths = _check_traces(raw, by_id, required, checked)
+    errors.extend(trace_errors)
+    paths.extend(trace_paths)
     findings = _merge(checked)
     if findings and not raw["priorities"]:
         raise ValueError("Для замечаний нужен порядок исправлений")
@@ -423,7 +494,7 @@ def _set_result(raw, claims, blocks):
         for ident in re.findall(r"\bR-[\w]+-\d+\b", text):
             if ident not in by_id:
                 raise ValueError(f"В тексте вывода указан неизвестный ID {ident}")
-    return findings, resolved, {k: raw[k] for k in ("assessment", "readiness", "priorities")}
+    return findings, resolved, {"scope": raw["scope"], "traces": raw["traces"]}
 
 
 def _adjudicate_one(d, original):
@@ -456,7 +527,8 @@ def _adjudicate_one(d, original):
             raise ValueError("Для уточнения нужен обоснованный и заново сформулированный вопрос")
         f.update(kind="Предполагаемый пробел", category="Полнота", counted=False,
                  ids=sorted(kept_ids), evidence=[a for a in original["evidence"] if a["id"] in kept_ids],
-                 topic=f["question"], scenario=f["test"], consequence=d["reason"], interpretations=[], fix="")
+                 topic=f["question"], scenario=f["test"], consequence=d["reason"], interpretations=[], fix="",
+                 reference=None)
     if f["counted"] and not direct:
         raise ValueError("Подтверждённое нарушение требует прямого основания в документе")
     if f["kind"] == "Рекомендация" and f["blocking"]:
@@ -531,6 +603,7 @@ def _audit_candidate(finding):
     # серьёзности и блокирования скрыты, чтобы выставить их независимо.
     entry = {k: finding[k] for k in ("id", "kind", "category", "topic", "scenario", "consequence",
                                      "interpretations", "question", "test", "fix")}
+    entry["reference"] = finding["reference"]
     entry["evidence"] = [{k: ev[k] for k in ("id", "block", "quote")} for ev in finding["evidence"]]
     return entry
 
@@ -568,11 +641,15 @@ def review(document, provider, progress=lambda msg: None):
         context.extend(ignored)
     progress(f"Сквозная проверка всего документа: утверждений {len(claims)}.")
     index = [{k: c[k] for k in ("id", "block", "quote", "summary", "assessment", "status")} for c in claims]
-    payload = {"blocks": [_source(b) for b in document.blocks], "claims": index}
-    candidates, resolved, _ = _request(
-        provider, SYNTHESIZE, payload, GLOBAL, lambda data: _set_result(data, claims, blocks), progress)
+    required, references = _trace_scope(claims, blocks)
+    payload = {"blocks": [_source(b) for b in document.blocks], "claims": index,
+               "required_traces": required, "references": references}
+    candidates, resolved, trace_review = _request(
+        provider, SYNTHESIZE, payload, GLOBAL,
+        lambda data: _set_result(data, claims, blocks, required, references), progress)
     progress(f"Независимая проверка оснований и вопросов по всему источнику: замечаний {len(candidates)}.")
     audit_payload = {"blocks": payload["blocks"], "candidates": [_audit_candidate(f) for f in candidates],
+                     "trace_review": trace_review,
                      "claims": [{k: c[k] for k in ("id", "block", "summary")} for c in claims]}
     findings, notes, set_review = _request(provider, ADJUDICATE, audit_payload, AUDIT,
                                            lambda data: _final_decisions(data, candidates, claims), progress)
