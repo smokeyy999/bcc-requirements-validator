@@ -10,6 +10,7 @@ from .bounds import (capacity_pairs, diagnosis as capacity_diagnosis, linked as 
                      missing_capacity_basis, unresolved_capacity)
 from . import command_rules, observation_scope
 from .condition_evidence import direct_condition_evidence
+from .data_boundary import BOUNDARY_INSTRUCTION, data_boundary_error, storage_units
 from .example_scope import EXAMPLE_SCOPE_INSTRUCTION, input_scope_error, unbound_response_examples
 from .metrics import purpose, stage
 from .prompts import ADJUDICATE, CAPACITY_INSTRUCTION, EXTRACT, SYNTHESIZE
@@ -884,7 +885,7 @@ def _adjudicate_one(d, original, source_quotes=None):
 
 
 def _final_decisions(raw, candidates, claims, signals=(), verified_refs=(), capacities=(), unbound_examples=None,
-                     scheduled=(), measurement_scopes=()):
+                     scheduled=(), measurement_scopes=(), stored_units=()):
     _nonempty(raw, "assessment", "readiness")
     originals = {f["id"]: f for f in candidates}
     source_quotes = {c["id"]: c["quote"] for c in claims}
@@ -906,6 +907,7 @@ def _final_decisions(raw, candidates, claims, signals=(), verified_refs=(), capa
                 raise DraftError(issue, ["/action", "/question_mode", "/question", "/test", "/question_check"])
             issue = (refund_scope_error(finding, prior, source_quotes)
                      or representation_error(finding, prior, source_quotes)
+                     or (data_boundary_error(finding, stored_units) if finding else "")
                      or (observation_scope.scope_error(finding, measurement_scopes) if finding else ""))
             if issue:
                 raise DraftError(issue, ["/action", "/reason", "/case_check", "/supports", "/question_mode",
@@ -1079,7 +1081,9 @@ def review(document, provider, progress=lambda msg: None):
     instructions = ("\n" + SIGNAL_INSTRUCTION if signals else "")
     focused_checks = {}
     measurements = observation_scope.measurement_scopes(document.blocks, claims)
+    units = storage_units(document.blocks, claims)
     for key, sources, instruction in (
+            ("stored_units", units, BOUNDARY_INSTRUCTION),
             ("named_transition_targets", named_transition_targets(claims), TRANSITION_INSTRUCTION),
             ("refund_rules", refund_rules(claims), REFUND_INSTRUCTION),
             ("returned_state_on_error", response_obligations(document.blocks), REPRESENTATION_INSTRUCTION),
@@ -1141,7 +1145,7 @@ def review(document, provider, progress=lambda msg: None):
                                           audit_payload, AUDIT,
                                           lambda data: _final_decisions(data, candidates, claims, signals, fixed,
                                                                         capacities, unbound_examples, scheduled,
-                                                                        measurements), progress)
+                                                                        measurements, units), progress)
     stage("validation")
     for claim in claims:
         ident = claim["id"]

@@ -1,0 +1,12 @@
+{
+  "implementation": "396c4905ab513d9104ce4cb71994b5ae2f112989",
+  "production_instruction_matches": true,
+  "production_payload_matches_except_unpublished_trace": true,
+  "named_transition_targets_count": 0,
+  "goals_unchanged": 17,
+  "corrected_question_or_test_literals_in_prompt": 0,
+  "checked_editorial_or_previous_question_test_literals": 6,
+  "prompt_sha256": "1193b47c8a60921be1f08db3a34f0639cd121a9e77deb83068eec698c2949fb6",
+  "instruction_sha256": "f991d69148b7a44571efaf19535baeceb036810665a07d2aaca5ca91d01bef9c",
+  "payload_sha256": "83d936f93bbcc126d6cfb389f83773e6a73c50a12265c24fc969f75cbceea6ac"
+}
