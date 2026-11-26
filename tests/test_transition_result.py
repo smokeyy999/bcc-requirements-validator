@@ -1,7 +1,7 @@
 import unittest
 
 from requirements_validator.engine import _check_question
-from requirements_validator.transition_result import missing_transition_result
+from requirements_validator.transition_result import missing_transition_result, named_transition_targets
 from tests.test_engine import checked_question
 
 
@@ -52,6 +52,21 @@ class TransitionResultTests(unittest.TestCase):
         self.assertFalse(missing_transition_result(dict(self.card, ids=["R-B-01"]), self.check, self.quotes))
         self.assertFalse(missing_transition_result(dict(self.card, category="Трассируемость", missing_target="S-7"),
                                                    self.check, self.quotes))
+
+    def test_result_predicate_with_a_common_subject_and_known_input(self):
+        rule = "После сигнала об отказе блок обязан перевести привод в указанное здесь конечное положение."
+        q = dict(self.check, decision="Какое конечное положение привода нужно при уже установленном отказе?",
+                 outcomes=["После защитного перехода привод поднят.", "После защитного перехода привод опущен."])
+        self.assertTrue(missing_transition_result(self.card, q, {self.ident: rule}))
+        for outcomes in (["При первом входе привод поднят.", "При другом входе привод опущен."],
+                         ["После перехода индикатор светлый.", "После перехода индикатор тёмный."],
+                         ["После перехода тест успешен.", "После перехода тест провален."]):
+            self.assertFalse(missing_transition_result(self.card, dict(q, outcomes=outcomes), {self.ident: rule}))
+
+    def test_source_hint_is_scoped_to_a_mandatory_transition(self):
+        samples = [self.rule, self.rule.replace("обязан", "может"),
+                   self.rule.replace("метку.", "метку из таблицы S-93.")]
+        self.assertEqual(named_transition_targets([dict(id=str(n),quote=quote) for n,quote in enumerate(samples)]), ["0"])
 
     def test_english_fixed_input_changes_only_the_prescribed_output(self):
         requirement = "For a damaged copy the printer must display the specified final code."

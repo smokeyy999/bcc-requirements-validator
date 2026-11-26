@@ -53,6 +53,43 @@ def _defined(quote, noun):
                         r"[`«\"']?[\w-]+", quote[m.end():], re.I) for m in noun.finditer(quote))
 
 
+def named_transition_targets(claims):
+    """Point the reviewer to mandatory transitions that name their target indirectly."""
+    targets = []
+    for claim in claims:
+        for sentence in re.split(r"[.!?;\n]+", claim["quote"]):
+            if any(_ACTION.search(sentence[:m.start()]) and not _REFERENCE.search(sentence[m.end():])
+                   for m in _POINTER.finditer(sentence)):
+                targets.append(claim["id"])
+                break
+    return targets
+
+
+TRANSITION_INSTRUCTION = """
+В named_transition_targets правило предписывает действие и ссылается на конкретный результат.
+Найди в исходном ТЗ, какое значение должно получиться. Если оно указано, подтверди его цитатой.
+Если конкретного результата нет, возьми один вход, для которого условие действия заведомо выполнено.
+Спроси, что должно получиться именно на этом входе, и сравни наблюдаемые результаты одного испытания.
+Незаданный конечный результат обязательного действия относится к полноте. Не объединяй его с
+самостоятельным вопросом о том, как распознавать вход, или о способе наблюдения испытания.
+"""
+
+
+def _same_subject_values(outcomes, action):
+    """A fixed subject can express its state as a predicate without repeating the state noun."""
+    frames = [_TOKEN.findall(text.casefold()) for text in outcomes]
+    a, b = frames
+    if (len(a) < 3 or a[:-1] != b[:-1] or a[-1] == b[-1]
+            or any(_EVALUATION.search(text) for text in outcomes)):
+        return False
+    # Require the thing whose state changes to occur in the obligation itself.
+    # This excludes branches such as «на стенде тест успешен / провален».
+    subject = a[-2]
+    if len(subject) < 3 or subject in {"это", "уже", "был", "was", "the", "is", "has", "been"}:
+        return False
+    return bool(re.search(r"\b" + re.escape(subject) + r"\b", action, re.I))
+
+
 def missing_transition_result(finding, check, source_quotes):
     """The judgement must concern a concrete result on an already fixed input."""
     if (finding["kind"] not in {"Дефект", "Предполагаемый пробел"} or finding.get("reference")
@@ -67,8 +104,7 @@ def missing_transition_result(finding, check, source_quotes):
         return False
     conditions = [s.split(",", 1)[0].strip().casefold() for s in outcomes]
     repeated = "," in outcomes[0] and "," in outcomes[1] and conditions[0] == conditions[1]
-    if not repeated and not any(_SAME.search(s) for s in outcomes):
-        return False
+    fixed_input = repeated or any(_SAME.search(s) for s in outcomes)
     for sentence in re.split(r"[.!?;\n]+", rule):
         for pointer in _POINTER.finditer(sentence):
             if not _ACTION.search(sentence[:pointer.start()]) or _REFERENCE.search(sentence[pointer.end():]):
@@ -76,7 +112,10 @@ def missing_transition_result(finding, check, source_quotes):
             noun = _noun_pattern(pointer["target"])
             if not noun.search(decision) or any(_defined(q, noun) for q in source_quotes.values()):
                 continue
-            first, second = (_value_frame(text, noun) for text in outcomes)
-            if first and second and first[0] == second[0] and first[1] != second[1]:
+            if fixed_input:
+                first, second = (_value_frame(text, noun) for text in outcomes)
+                if first and second and first[0] == second[0] and first[1] != second[1]:
+                    return True
+            if _KNOWN.search(decision) and _same_subject_values(outcomes, sentence):
                 return True
     return False

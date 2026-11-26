@@ -22,7 +22,7 @@ from .refund_scope import REFUND_INSTRUCTION, refund_rules, refund_scope_error
 from .response_representation import REPRESENTATION_INSTRUCTION, representation_error, response_obligations
 from .signals import SIGNAL_INSTRUCTION, grouped_in, has_support, source_signals
 from .text import simple_source_numbers, text_key as _canon
-from .transition_result import missing_transition_result
+from .transition_result import TRANSITION_INSTRUCTION, missing_transition_result, named_transition_targets
 
 
 def obj(**fields):
@@ -1080,6 +1080,7 @@ def review(document, provider, progress=lambda msg: None):
     focused_checks = {}
     measurements = observation_scope.measurement_scopes(document.blocks, claims)
     for key, sources, instruction in (
+            ("named_transition_targets", named_transition_targets(claims), TRANSITION_INSTRUCTION),
             ("refund_rules", refund_rules(claims), REFUND_INSTRUCTION),
             ("returned_state_on_error", response_obligations(document.blocks), REPRESENTATION_INSTRUCTION),
             ("measurement_scopes", measurements, observation_scope.INSTRUCTION)):
