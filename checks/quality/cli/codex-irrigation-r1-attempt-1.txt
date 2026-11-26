@@ -1,0 +1,14 @@
+2026-11-26T23:27:18+05:00
+> python -m requirements_validator --input benchmark/irrigation/requirements.md --output reports/quality/benchmark-runs/irrigation/r1/report.md
+Документ «Управление поливом теплицы» · исходных блоков 8 · SHA-256 1edf90ca21c24de23059219721af3040d926afbf610089d5f5f68da36489a3f7
+Версия 3018c8ee3c2868999c6070774331c57e0cb936ff · рабочая копия чистая
+Доступ подтверждён · OpenAI через Codex CLI · gpt-6.2-sol
+Выделение и оценка утверждений: пакет 1, блоков 8.
+Сквозная проверка всего документа: утверждений 10.
+Проверка черновика: /traces/1/subjects/0: неизвестный ID R-M0002-02; замени известным ID либо убери его
+/traces/1/supports/0: неизвестный ID R-M0002-02; замени известным ID либо убери его. Запрошена одна точечная правка.
+Независимая проверка оснований и вопросов по всему источнику: замечаний 8.
+Отчёт сохранён в ./reports/quality/benchmark-runs/irrigation/r1/report.md
+Метрики сохранены в ./reports/quality/benchmark-runs/irrigation/r1/report/run-meta.json
+Готово за 208.4 с, включая запись · запросов модели 5 (повторных 1) · токены входа 84351, выхода 9274 · утверждений 10 · нарушений 2 · вопросов 7
+Exit 0, 208.5 s
