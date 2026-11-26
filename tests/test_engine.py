@@ -10,12 +10,18 @@ from requirements_validator.engine import AUDIT, GLOBAL, LOCAL, OPERATION, PATCH
 from requirements_validator.report import author_proposal
 
 
+def checked_question(ident, known, decision, first, second, state="открытый выбор"):
+    return [dict(state=state, obligation_id=ident, checked_ids=[ident], known_answer=known,
+                 decision=decision, outcomes=[first, second])]
+
+
 def agreed_audit():
     """Фиксированный ответ независимого рецензента для ТЗ про бронирование."""
     return {
         "decisions": [{"id": "Z-001", "action": "оставить", "basis": "Прямое обязательство",
                        "severity": "Критичная", "reason": "Цена отмены за сутки имеет два исхода.",
                        "blocking": True, "supports": [], "question_mode": "сохранить", "question": "", "test": "",
+                       "question_check": [], "same_decision_as": "",
                        "case_check": {"status": "подтверждено", "condition": "Бронь отменяют за сутки.",
                                       "effect": "", "anchors": [{"id": "R-M01-01", "quote": "за сутки"},
                                                                   {"id": "R-M02-01", "quote": "за сутки"}]}}],
@@ -244,6 +250,9 @@ class TestReview(unittest.TestCase):
                 review(self.document, Responses(self.local, self.whole, self.whole))
         trace["finding_topic"] = self.issue["topic"]
         audit = agreed_audit()
+        audit["decisions"][0]["question_check"] = checked_question(
+            "R-M01-01", "Обещан счётчик гостей.", "Когда учитывается вошедший?",
+            "Показание меняется при входе.", "Показание меняется после регистрации.")
         audit["decisions"][0]["case_check"] = {"status": "не применимо", "condition": "", "effect": "", "anchors": []}
         result = review(self.document, Responses(self.local, self.whole, audits=[audit]))
         self.assertEqual(result["counts"]["gaps"], 1)
@@ -375,6 +384,8 @@ class TestReview(unittest.TestCase):
             severity="Низкая", reason="Указана вместимость, условия рассадки открыты.", blocking=False,
             supports=["R-M01-02"], question_mode="заменить", question="Как расставляются места?",
             test="Проверить рассадку по выбранной схеме.",
+            question_check=checked_question("R-M01-02", "Указана вместимость зала.", "Какая рассадка применяется?",
+                                            "Места занимают рядами.", "Места занимают за столами."),
             case_check=dict(status="требует ответа", condition="Какая схема рассадки применима?",
                             effect="При разных схемах число доступных мест может различаться.",
                             anchors=[{"id": "R-M01-02", "quote": self.second}])))
@@ -432,7 +443,10 @@ class TestReview(unittest.TestCase):
 
     def test_gap_excluded_from_defect_count(self):
         self.issue.update(kind="Предполагаемый пробел", category="Полнота", interpretations=[])
-        result = review(self.document, Responses(self.local, self.whole))
+        audit = agreed_audit()
+        audit["decisions"][0]["question_check"] = checked_question(
+            "R-M01-01", self.first, "Какая плата при отмене за сутки?", "Плата удержана.", "Плата не удержана.")
+        result = review(self.document, Responses(self.local, self.whole, audits=[audit]))
         self.assertEqual(result["counts"]["defects"], 0)
         self.assertEqual(result["counts"]["gaps"], 1)
         self.assertEqual(result["requirements"][0]["status"], "Связано с вопросом к автору")
@@ -489,6 +503,9 @@ class TestReview(unittest.TestCase):
         audit["decisions"][0].update(action="уточнить", basis="Обоснованное ожидание", blocking=False,
                                      severity="Низкая", reason="Размер суммы упоминается для одного условия.",
                                      supports=["R-M02-01"], question_mode="заменить",
+                                     question_check=checked_question(
+                                         "R-M02-01", self.third, "Когда применяют удержание?",
+                                         "Сумму перечислили залу.", "Плата осталась у посетителя."),
                                      question="К какому условию относится удержание?", test="Отмена зала за сутки.")
         audit["decisions"][0]["case_check"].update(
             status="требует ответа", condition="При каких условиях возникает плата?",

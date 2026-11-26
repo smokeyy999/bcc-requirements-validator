@@ -86,7 +86,7 @@ class RunMeasurementsTest(unittest.TestCase):
     def test_parallel_extraction_keeps_context_order_and_request_accounting(self):
         from threading import Barrier
         ready = Barrier(2, timeout=4)
-        a, b = SimpleNamespace(id="A"), SimpleNamespace(id="B")
+        a, b = (SimpleNamespace(id=ident, section="Контекст", text="Обзор.") for ident in ("A", "B"))
         document = SimpleNamespace(blocks=[a, b])
         def local(provider, batch, blocks, progress):
             with purpose("block_retry" if batch == [a] else "initial"), transport("generation"):

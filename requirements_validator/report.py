@@ -21,6 +21,30 @@ def refs(ids):
     return ", ".join(f"[{item}](#{item.lower()})" for item in ids)
 
 
+def question_basis(finding):
+    check = finding.get("question_basis")
+    if not check:
+        return []
+    def key(text):
+        return " ".join(re.findall(r"\w+", text.casefold()))
+    premise = finding.get("open_premise", {})
+    shown = {key(finding.get(k, "")) for k in ("scenario", "consequence", "reason", "question", "test", "topic")}
+    shown.update(key(premise.get(k, "")) for k in ("condition", "effect"))
+    shown.update(key(option["effect"]) for option in finding.get("proposal_options", []))
+    cited = list(dict.fromkeys([check["obligation_id"], *check["checked_ids"]]))
+    lines = []
+    for label, value in (("Уже установлено", check["known_answer"]), ("Открытое решение", check["decision"])):
+        if key(value) not in shown:
+            lines.append(f"**{label}.** {plain(value)}")
+            shown.add(key(value))
+    outcomes = [plain(value) for value in check["outcomes"] if key(value) not in shown]
+    if outcomes:
+        lines.append("**Что различит проверка.** " + " / ".join(outcomes))
+    if lines:
+        lines[0] += " Основания — " + refs(cited) + "."
+    return lines
+
+
 def _contacts(blocks):
     """Read explicit role/value fields in document metadata and retain their scope."""
     roles = {"автор", "автор тз", "аналитик", "владелец продукта", "бизнес-заказчик",
@@ -235,6 +259,7 @@ def render(doc, result, run, source_path, output_path):
         if open_premise:
             parts.append("**Что нужно уточнить.** " + plain(open_premise["condition"]))
             parts.append("**Как ответ изменит приёмку.** " + plain(open_premise["effect"]))
+        parts.extend(question_basis(f))
         if f.get("shared_premise"):
             premise = f["shared_premise"]
             sources = ", ".join(f'{refs([a["id"]])} «{plain(a["quote"])}»' for a in premise["anchors"])

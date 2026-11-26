@@ -8,6 +8,7 @@ from copy import deepcopy
 
 from .metrics import purpose, stage
 from .prompts import ADJUDICATE, EXTRACT, SYNTHESIZE
+from .signals import SIGNAL_INSTRUCTION, grouped_in, has_support, source_signals
 
 
 def obj(**fields):
@@ -66,11 +67,17 @@ GLOBAL = obj(findings=array(FINDING), resolved=array(obj(id=STR, reason=STR, sup
              assessment=STR, readiness=STR, priorities=array(STR))
 CASE_CHECK = obj(status=enum("подтверждено", "разные условия", "требует ответа", "не применимо"),
                  condition=STR, anchors=array(obj(id=STR, quote=STR)), effect=STR)
+QUESTION_CHECK = obj(state=enum("открытый выбор", "неполный приёмочный сценарий",
+                                "нет меры заявленного свойства", "ответ дан", "необязательная деталь",
+                                "зависит от другого решения"),
+                     obligation_id=STR, checked_ids=array(STR), known_answer=STR, decision=STR,
+                     outcomes=array(STR))
 DECISION = obj(id=STR, action=enum("оставить", "снять", "уточнить"),
                basis=enum("Прямое обязательство", "Обоснованное ожидание", "Решение команды", "Вне требований"),
                severity=FINDING["properties"]["severity"], reason=STR, blocking=BOOL,
                supports=array(STR), question_mode=enum("сохранить", "заменить", "убрать"),
-               question=STR, test=STR, case_check=CASE_CHECK)
+               question=STR, test=STR, case_check=CASE_CHECK, question_check=array(QUESTION_CHECK),
+               same_decision_as=STR)
 AUDIT = obj(decisions=array(DECISION), assessment=STR, readiness=STR,
             priorities=array(obj(ids=array(STR), step=STR)))
 PATCH = obj(changes=array(obj(op=enum("replace", "append", "remove"), path=STR, value=STR)))
@@ -561,7 +568,7 @@ def _check_traces(raw, by_id, required, findings):
     return errors, paths, evidence_ids
 
 
-def _set_result(raw, claims, blocks, required, references):
+def _set_result(raw, claims, blocks, required, references, signals=()):
     _nonempty(raw, "assessment", "readiness")
     if any(not step.strip() for step in raw["priorities"]):
         raise ValueError("Пустой шаг в порядке исправлений")
@@ -593,6 +600,25 @@ def _set_result(raw, claims, blocks, required, references):
             paths.append(f"/resolved/{i}")
             continue
         resolved[ident] = {"reason": row["reason"], "supports": list(dict.fromkeys(supports))}
+    for signal in signals:
+        ids = set(signal["claims"])
+        if not ids or grouped_in(signal, findings):
+            continue
+        if all(ident in resolved and has_support(signal, resolved[ident]["supports"]) for ident in ids):
+            continue
+        errors.append(f'{signal["block"]} ({signal["type"]}): сопоставь {", ".join(sorted(ids))} '
+                      "в одной карточке либо закрой каждый ID с проверенными основаниями. "
+                      "При несовпадении нормализованных величин укажи отдельное основание исключения.")
+        paths.extend(["/resolved/-", "/findings/-"])
+        for i, row in enumerate(raw["resolved"]):
+            if row["id"] in ids:
+                paths.append(f"/resolved/{i}")
+        for i, entry in checked.items():
+            missing = ids - set(entry["ids"])
+            if missing and ids.intersection(entry["ids"]):
+                path = f"/findings/{i}/evidence/-"
+                paths.append(path)
+                evidence_ids.setdefault(path, set()).update(missing)
     pending = {c["id"] for c in claims if c["status"] != "проверяемо"} - linked - resolved.keys()
     if pending:
         errors.append("Нет результата сквозной проверки кандидатов " + ", ".join(sorted(pending)))
@@ -662,6 +688,37 @@ def _check_case(d, original, source_quotes):
         raise ValueError("Условный конфликт при недоказанной предпосылке не является критичным или блокирующим")
 
 
+def _check_question(d, f, source_quotes):
+    """A supposed gap needs a sourced obligation and two different acceptance outcomes."""
+    checks = d["question_check"]
+    needs_check = f["kind"] == "Предполагаемый пробел" or (
+        f["kind"] == "Дефект" and f["category"] in {"Полнота", "Проверяемость"} and bool(f["question"]))
+    if not checks and not needs_check:
+        return
+    path = ["/question_check"]
+    if len(checks) != 1 or not f["question"]:
+        raise DraftError("Для открытого пробела или вопроса о неполной приёмке нужна одна проверка вопроса", path)
+    check = checks[0]
+    state = check["state"]
+    if state in {"ответ дан", "необязательная деталь", "зависит от другого решения"}:
+        raise DraftError(f"Вопрос не самостоятелен ({state}). Сними карточку, либо сохрани доказанный дефект без лишнего вопроса", path)
+    obligation, checked = check["obligation_id"], set(check["checked_ids"])
+    if obligation not in source_quotes or not checked or not checked <= source_quotes.keys():
+        raise DraftError("Для обещанного результата и поиска ответа укажи действительные ID источника", path)
+    if not ({obligation} | checked).intersection(f["ids"]):
+        raise DraftError("Проверка вопроса должна охватывать основание рассматриваемой карточки", path)
+    _nonempty(check, "known_answer", "decision")
+    outcomes = {_canon(result) for result in check["outcomes"]}
+    if len(check["outcomes"]) != 2 or len(outcomes) != 2 or "" in outcomes:
+        raise DraftError("Для одного испытания укажи два разных наблюдаемых результата, зависящих от ответа", path)
+    if needs_check and f["category"] in {"Полнота", "Проверяемость"}:
+        if state == "неполный приёмочный сценарий":
+            f["category"] = "Полнота"
+        elif state == "нет меры заявленного свойства":
+            f["category"] = "Проверяемость"
+    f["question_basis"] = dict(check, checked_ids=list(dict.fromkeys(check["checked_ids"])))
+
+
 def _adjudicate_one(d, original, source_quotes=None):
     _nonempty(d, "reason")
     action, mode = d["action"], d["question_mode"]
@@ -719,10 +776,13 @@ def _adjudicate_one(d, original, source_quotes=None):
                               or f["kind"] in {"Неоднозначность", "Предполагаемый пробел"}
                               or (f["kind"] == "Дефект" and not f["fix"])):
         raise ValueError("Нужен переоценённый вопрос или доказанное исправление")
+    if source_quotes is None:
+        source_quotes = {a["id"]: a["quote"] for a in original["evidence"]}
+    _check_question(d, f, source_quotes)
     return f
 
 
-def _final_decisions(raw, candidates, claims):
+def _final_decisions(raw, candidates, claims, signals=()):
     _nonempty(raw, "assessment", "readiness")
     originals = {f["id"]: f for f in candidates}
     source_quotes = {c["id"]: c["quote"] for c in claims}
@@ -754,9 +814,36 @@ def _final_decisions(raw, candidates, claims):
                 else:
                     explanation = "При сквозной проверке это утверждение исключено из оснований замечания."
                 notes.setdefault(ref, []).append((explanation, refuting_sources))
+    retained = {f["id"]: f for f in kept}
+    owners = {d["id"]: d["same_decision_as"] for d in raw["decisions"] if d["same_decision_as"]}
+    for i, d in enumerate(raw["decisions"]):
+        owner = d["same_decision_as"]
+        if not owner:
+            continue
+        if owner in owners or owner not in retained or not retained[owner]["question"]:
+            errors.append(f"/decisions/{i}/same_decision_as: нужен прямой ID оставшейся самостоятельной карточки с вопросом")
+            paths.append(f"/decisions/{i}")
+            continue
+        if d["id"] in retained:
+            finding = retained[d["id"]]
+            if not finding["question"]:
+                errors.append(f"/decisions/{i}/same_decision_as: у связанной карточки нет открытого вопроса")
+                paths.append(f"/decisions/{i}")
+            else:
+                finding["same_decision_as"] = owner
     if seen != originals.keys():
         errors.append("Нет решения по замечаниям " + ", ".join(sorted(originals.keys() - seen)))
         paths.append("/decisions/-")
+    for signal in signals:
+        if signal["type"] != "unit_scale" or signal["qualified"] or grouped_in(signal, kept):
+            continue
+        matching = [(i, d) for i, d in enumerate(raw["decisions"]) if d["id"] in originals
+                    and grouped_in(signal, [originals[d["id"]]])]
+        if matching and not any(has_support(signal, [a["id"] for a in d["case_check"]["anchors"]])
+                                for _, d in matching):
+            errors.append(f'{signal["block"]}: расхождение величин осталось без основания. '
+                          "Сохрани обе стороны или укажи цитату об отдельном условии.")
+            paths.extend(f"/decisions/{i}" for i, _ in matching)
     if errors:
         # Изменённые вердикты могут изменить итог и порядок исправлений.
         paths.extend(["/assessment", "/readiness", "/priorities"])
@@ -784,6 +871,8 @@ def _final_decisions(raw, candidates, claims):
             prose.extend([f["open_premise"]["condition"], f["open_premise"]["effect"]])
         if f.get("shared_premise"):
             prose.append(f["shared_premise"]["condition"])
+        if check := f.get("question_basis"):
+            prose.extend([check["known_answer"], check["decision"], *check["outcomes"]])
     for paragraph in prose:
         for ident in re.findall(r"\b(?:Z-\d+|R-\w+-\d+)\b", paragraph):
             if ident not in allowed:
@@ -804,12 +893,14 @@ def _audit_candidate(finding):
 def _questions(findings):
     questions = {}
     rank = {}
+    by_id = {f["id"]: f for f in findings}
     for f in findings:
         if not f["question"]:
             continue
-        key = _canon(f["question"])
+        owner = by_id[f.get("same_decision_as", f["id"])]
+        key = _canon(owner["question"])
         if key not in questions:
-            questions[key] = {"question": f["question"], "tests": [], "findings": [], "blocking": False}
+            questions[key] = {"question": owner["question"], "tests": [], "findings": [], "blocking": False}
         q = questions[key]
         q["findings"].append(f["id"])
         if f["test"] not in q["tests"]:
@@ -846,18 +937,24 @@ def review(document, provider, progress=lambda msg: None):
     progress(f"Сквозная проверка всего документа: утверждений {len(claims)}.")
     index = [{k: c[k] for k in ("id", "block", "quote", "summary", "assessment", "status")} for c in claims]
     required, references = _trace_scope(claims, blocks)
+    signals = source_signals(document.blocks, claims)
     payload = {"blocks": [_source(b) for b in document.blocks], "claims": index,
                "required_traces": required, "references": references}
+    if signals:
+        payload["source_signals"] = signals
     candidates, resolved, trace_review = _request(
-        provider, SYNTHESIZE, payload, GLOBAL,
-        lambda data: _set_result(data, claims, blocks, required, references), progress)
+        provider, SYNTHESIZE + ("\n" + SIGNAL_INSTRUCTION if signals else ""), payload, GLOBAL,
+        lambda data: _set_result(data, claims, blocks, required, references, signals), progress)
     stage("adjudication")
     progress(f"Независимая проверка оснований и вопросов по всему источнику: замечаний {len(candidates)}.")
     audit_payload = {"blocks": payload["blocks"], "candidates": [_audit_candidate(f) for f in candidates],
                      "trace_review": trace_review,
                      "claims": [{k: c[k] for k in ("id", "block", "quote")} for c in claims]}
-    findings, notes, set_review = _request(provider, ADJUDICATE, audit_payload, AUDIT,
-                                          lambda data: _final_decisions(data, candidates, claims), progress)
+    if signals:
+        audit_payload["source_signals"] = signals
+    findings, notes, set_review = _request(provider, ADJUDICATE + ("\n" + SIGNAL_INSTRUCTION if signals else ""),
+                                          audit_payload, AUDIT,
+                                          lambda data: _final_decisions(data, candidates, claims, signals), progress)
     stage("validation")
     for claim in claims:
         ident = claim["id"]

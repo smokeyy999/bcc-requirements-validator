@@ -1,6 +1,7 @@
 import unittest
 
 from requirements_validator.engine import _adjudicate_one
+from tests.test_engine import checked_question
 
 
 class PremiseReviewTests(unittest.TestCase):
@@ -16,6 +17,9 @@ class PremiseReviewTests(unittest.TestCase):
                              supports=list(self.item["ids"]), question="Чему равно начальное показание?",
                              test="Сверить показание до и после одного цикла.",
                              reason="Пример сообщает приращение, исходное показание в нём отсутствует.",
+                             question_check=checked_question("R-A-01", "Показание до цикла сохранено.",
+                                 "Каково исходное показание?", "Пример проходит с исходным значением два.",
+                                 "При исходном нуле пример расходится с правилом."),
                              case_check=dict(status="требует ответа", condition="Начальное показание счётчика.",
                                              effect="При исходном значении два пример согласован, при нулевом — расходится.",
                                              anchors=evidence))
