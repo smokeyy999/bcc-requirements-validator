@@ -6,7 +6,7 @@ import unittest
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from requirements_validator.engine import AUDIT, GLOBAL, LOCAL, OPERATION, PATCH, VALUE, review
+from requirements_validator.engine import AUDIT, GLOBAL, LOCAL, OPERATION, PATCH, VALUE, _apply_patch, review
 from requirements_validator.report import author_proposal
 
 
@@ -110,6 +110,60 @@ class TestReview(unittest.TestCase):
         self.assertNotIn("карта", json.dumps(result, ensure_ascii=False).lower())
         self.assertEqual([schema for _, schema in provider.calls], [LOCAL, GLOBAL, AUDIT])
         self.assertIn(self.blocks[-1].text, provider.calls[-1][0])
+
+    def test_repair_rejected_applicability_object_or_only_its_array(self):
+        valid_case = agreed_audit()["decisions"][0]["case_check"]
+        for field, corrected in (("case_check", valid_case), ("case_check/anchors", valid_case["anchors"])):
+            with self.subTest(field=field):
+                audit = agreed_audit()
+                audit["decisions"][0]["case_check"]["anchors"] = []
+                patch = {"changes": [{"op": "replace", "path": f"/decisions/0/{field}",
+                                      "value": json.dumps(corrected, ensure_ascii=False)}]}
+                provider = Responses(self.local, self.whole, audits=[audit, patch])
+                result = review(self.document, provider)
+                self.assertEqual(result["counts"]["defects"], 1)
+                self.assertEqual(result["findings"][0]["shared_premise"]["anchors"], valid_case["anchors"])
+                self.assertEqual([schema for _, schema in provider.calls], [LOCAL, GLOBAL, AUDIT, PATCH])
+                self.assertIn("/decisions/0/case_check/anchors (Z-001)", provider.calls[-1][0])
+
+    def test_nested_repair_keeps_valid_neighbour_and_collection_protected(self):
+        audit = agreed_audit()
+        audit["decisions"].append(dict(copy.deepcopy(audit["decisions"][0]), id="Z-002"))
+        before = copy.deepcopy(audit)
+        for path, value in (("/decisions/1/case_check/anchors", []), ("/decisions", []),
+                            ("/priorities", [])):
+            with self.subTest(path=path):
+                patch = {"changes": [{"op": "replace", "path": path, "value": json.dumps(value)}]}
+                with self.assertRaisesRegex(ValueError, path):
+                    _apply_patch(audit, AUDIT, patch, ["/decisions/0", "/priorities"])
+                self.assertEqual(audit, before)
+
+    def test_nested_repair_requires_schema_and_original_evidence(self):
+        path = "/decisions/0/case_check/anchors"
+        for value, message in (({}, "требуется array"), ([{"id": "R-M01-01", "quote": "выдумано"}], "дословные")):
+            with self.subTest(value=value):
+                audit = agreed_audit()
+                audit["decisions"][0]["case_check"]["anchors"] = []
+                patch = {"changes": [{"op": "replace", "path": path, "value": json.dumps(value)}]}
+                with self.assertRaisesRegex(ValueError, message):
+                    review(self.document, Responses(self.local, self.whole, audits=[audit, patch]))
+
+    def test_nested_repair_limits_changes_in_aggregate(self):
+        path = "/decisions/0/case_check/anchors"
+        audit = agreed_audit()
+        replacement = audit["decisions"][0]["case_check"]["anchors"] * 100
+        patch = {"changes": [{"op": "replace", "path": path, "value": json.dumps(replacement)}]}
+        with self.assertRaisesRegex(ValueError, "лимит"):
+            _apply_patch(audit, AUDIT, patch, ["/decisions/0"])
+
+    def test_nested_replacement_cannot_silently_discard_an_edit_to_the_same_field(self):
+        path = "/decisions/0/case_check/anchors"
+        audit = agreed_audit()
+        replace = {"op": "replace", "path": path, "value": "[]"}
+        remove = {"op": "remove", "path": path + "/0", "value": ""}
+        for operations in ([replace, remove], [remove, replace]):
+            with self.subTest(operations=operations), self.assertRaisesRegex(ValueError, "пересекается"):
+                _apply_patch(audit, AUDIT, {"changes": operations}, ["/decisions/0"])
 
     def test_contradiction_proposes_two_cited_choices_with_separate_acceptance_outcomes(self):
         result = review(self.document, Responses(self.local, self.whole))

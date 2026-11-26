@@ -74,6 +74,7 @@ DECISION = obj(id=STR, action=enum("оставить", "снять", "уточн
 AUDIT = obj(decisions=array(DECISION), assessment=STR, readiness=STR,
             priorities=array(obj(ids=array(STR), step=STR)))
 PATCH = obj(changes=array(obj(op=enum("replace", "append", "remove"), path=STR, value=STR)))
+MAX_AUDIT_PATCH_CHANGES = 64
 
 
 def validate(value, schema, path="ответ"):
@@ -112,10 +113,25 @@ def _index(segment, size):
     return int(segment)
 
 
+def _replacement_cost(before, after):
+    """Count edits as individual property changes and array insertions or removals."""
+    if before == after:
+        return 0
+    if isinstance(before, dict):
+        return sum(_replacement_cost(before[key], after[key]) for key in before)
+    if isinstance(before, list):
+        return abs(len(before) - len(after)) + sum(
+            _replacement_cost(left, right) for left, right in zip(before, after))
+    return 1
+
+
 def _apply_patch(original, schema, change_set, allowed, evidence_ids=None):
     validate(change_set, PATCH)
     if not change_set["changes"]:
         raise ValueError("Пустая правка не исправляет отклонённый черновик")
+    changes = len(change_set["changes"])
+    if schema is AUDIT and changes > MAX_AUDIT_PATCH_CHANGES:
+        raise ValueError(f"Превышен лимит правок рецензии ({MAX_AUDIT_PATCH_CHANGES})")
     result = deepcopy(original)
     # Пути относятся к исходному черновику: удаления выполняются последними
     # в обратном порядке, чтобы соседние элементы не сместились.
@@ -137,8 +153,16 @@ def _apply_patch(original, schema, change_set, allowed, evidence_ids=None):
         last = segments[-1]
         if spec["type"] == "object" and last in spec["properties"]:
             key, target = last, spec["properties"][last]
-            if op != "replace" or target["type"] in {"object", "array"}:
-                raise ValueError("Разрешена замена скалярного поля или одного элемента массива")
+            if op != "replace":
+                raise ValueError(f"{path}: для именованного поля допускается только replace")
+            if target["type"] in {"object", "array"}:
+                rejected_decision = (schema is AUDIT and len(segments) >= 3 and segments[0] == "decisions"
+                                     and f"/decisions/{segments[1]}" in allowed)
+                if not rejected_decision:
+                    raise ValueError(f"{path}: используйте пути отдельных элементов или скалярных полей")
+                if any(other is not edit and (other["path"] == path or other["path"].startswith(path + "/")
+                           or path.startswith(other["path"] + "/")) for other in change_set["changes"]):
+                    raise ValueError(f"{path}: вложенная замена пересекается с другой правкой")
         elif spec["type"] == "array":
             target = spec["items"]
             if op == "append":
@@ -154,8 +178,16 @@ def _apply_patch(original, schema, change_set, allowed, evidence_ids=None):
                 raise ValueError("Удаление требует пустого value и уникального индекса")
             removed.append((node, key))
             continue
-        value = edit["value"] if target["type"] == "string" else json.loads(edit["value"])
+        try:
+            value = edit["value"] if target["type"] == "string" else json.loads(edit["value"])
+        except json.JSONDecodeError as error:
+            raise ValueError(f"{path}: value должен содержать JSON типа {target['type']}") from error
         validate(value, target, path)
+        if schema is AUDIT and op == "replace" and target["type"] in {"object", "array"}:
+            # A nested replacement consumes the same budget as its component edits.
+            changes += max(0, _replacement_cost(node[key], value) - 1)
+            if changes > MAX_AUDIT_PATCH_CHANGES:
+                raise ValueError(f"{path}: превышен лимит правок рецензии ({MAX_AUDIT_PATCH_CHANGES})")
         if evidence_ids and path in evidence_ids and value["id"] not in evidence_ids[path]:
             raise ValueError(f"{path}: разрешены только указанные в диагностике ID оснований")
         if op == "append":
@@ -193,9 +225,12 @@ def _request(provider, instruction, payload, schema, parse, progress):
             "Верни короткий массив changes. path — путь /поле/индекс/поле, индексы с нуля. "
             "replace изменяет отдельное поле или элемент массива; append /имя_массива/- добавляет "
             "одну запись; remove удаляет отдельный элемент по исходному индексу (value пуст). "
-            "В value для строки передай сам текст, для объекта или bool — JSON, записанный строкой. "
-            "Сохрани действительные результаты. Поля-массивы целиком не заменяются.\n"
-            + instruction + "\nТы исправляешь черновик этого этапа. Твой ответ — только объект с changes.\n"
+            "В value для строки передай сам текст, для остальных типов — JSON, записанный строкой. "
+            "Сохрани действительные результаты. Меняй массивы по одному элементу. "
+            + ("В строке /decisions/N, указанной в allowed_paths, можно также заменить вложенное "
+               "поле целиком, например /decisions/N/case_check или /decisions/N/case_check/anchors. "
+               f"Лимит правок {MAX_AUDIT_PATCH_CHANGES}, включая изменения внутри замен. " if schema is AUDIT else "")
+            + "\n" + instruction + "\nТы исправляешь черновик этого этапа. Твой ответ — только объект с changes.\n"
             + "\nВход (JSON):\n" + compact({
                 "input": payload, "draft": draft, "errors": summary, "allowed_paths": allowed,
                 "schema": schema,
@@ -581,7 +616,8 @@ def _check_case(d, original):
     compares_outcomes = conflict or original["kind"] == "Неоднозначность"
     if case["status"] == "не применимо":
         if compares_outcomes or (d["action"] == "оставить" and original["counted"] and d["severity"] == "Критичная"):
-            raise ValueError("Для противоречия, неоднозначности или критичного нарушения проверь условия его применимости")
+            raise DraftError("Для противоречия, неоднозначности или критичного нарушения проверь условия его применимости",
+                             ["/case_check"])
         if case["anchors"] or case["condition"].strip() or case["effect"].strip():
             raise ValueError("В неприменимой проверке условия оставь condition, effect и anchors пустыми")
         return
@@ -590,11 +626,12 @@ def _check_case(d, original):
     if not anchors or any(not a["quote"].strip() or not any(
             a["id"] == e["id"] and a["quote"] in e["quote"] for e in original["evidence"]
     ) for a in anchors):
-        raise ValueError("Для проверки условия нужны дословные непустые фрагменты evidence с их ID")
+        raise DraftError("Для проверки условия нужны дословные непустые фрагменты evidence с их ID",
+                         ["/case_check/anchors"])
     ids = {a["id"] for a in anchors}
     if case["status"] == "подтверждено":
         if conflict and d["action"] == "оставить" and len(ids) < 2:
-            raise ValueError("Приведи подтверждение общих условий с обеих сторон конфликта")
+            raise DraftError("Приведи подтверждение общих условий с обеих сторон конфликта", ["/case_check/anchors"])
         return
     if case["status"] == "разные условия":
         if compares_outcomes and d["action"] == "оставить":
@@ -685,8 +722,10 @@ def _final_decisions(raw, candidates, claims):
         try:
             finding = _adjudicate_one(decision, prior)
         except ValueError as error:
-            errors.append(f"/decisions/{i}: {error}")
-            paths.append(f"/decisions/{i}")
+            row_path = f"/decisions/{i}"
+            targets = [row_path + suffix for suffix in error.paths] if isinstance(error, DraftError) else [row_path]
+            errors.append(f"{', '.join(targets)} ({ident}): {error}")
+            paths.append(row_path)
             continue
         if finding is not None:
             kept.append(finding)
