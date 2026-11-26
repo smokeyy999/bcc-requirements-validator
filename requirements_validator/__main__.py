@@ -150,7 +150,8 @@ def _run(source, output, progress, metrics):
     content = render(doc, result, passport, source, output)
     counts = result["counts"]
     meta = {
-        "schema_version": 1, "source": source.name, "source_sha256": doc.sha256,
+        "schema_version": 1, "report_format_version": 2,
+        "source": source.name, "source_sha256": doc.sha256,
         "source_blocks": len(doc.blocks), "report": output.name,
         "report_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
         "started_at": passport["started"], "finished_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -174,7 +175,7 @@ def _run(source, output, progress, metrics):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Статическое ревью требований в Markdown, DOCX или текстовом PDF.")
+    parser = argparse.ArgumentParser(description="Статическое ревью требований в Markdown, DOCX или текстовом PDF через Codex CLI (gpt-6.2-sol).")
     parser.add_argument("--input", type=Path, required=True, help="исходный файл .md, .docx или .pdf")
     parser.add_argument("--output", type=Path, required=True, help="путь для полного отчёта .md")
     args = parser.parse_args(argv)

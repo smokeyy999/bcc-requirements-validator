@@ -439,8 +439,6 @@ def main(argv=None):
             provider = get_provider()
             config = provider.configuration()
             if args.jobs > 1:
-                if provider.name == "Gemini API":
-                    raise ValueError("Для Gemini укажите --jobs 1, чтобы соблюдать общую частоту запросов")
                 config["extract_workers"] = 1
             head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
             with ThreadPoolExecutor(max_workers=args.jobs) as pool:

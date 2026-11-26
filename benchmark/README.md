@@ -16,15 +16,15 @@
 Настройте провайдер по README в корне и запускайте из корня репозитория. Полный эксперимент по умолчанию делает три независимых прохода через семь входных файлов. Во временном каталоге `.tmp/benchmark-runs/` каждый завершённый результат сохраняется сразу. Повторите ту же команду с `--resume` для продолжения прерванного эксперимента.
 
 ```sh
-python -m scripts.evaluate --repeat 3 --jobs 1 --resume
+python -m scripts.evaluate --repeat 3 --jobs 1 --resume --runs-dir .tmp/live/benchmark-runs --output reports/local/evaluation.md
 ```
 
-Последовательный режим подходит для Gemini и Codex. Для Codex с достаточными лимитами можно передать `--jobs 2`. Тогда в каждом дочернем процессе извлечение идёт в один поток. Для отдельной отладки доступна команда `python -m scripts.evaluate --split dev --repeat 1 --runs-dir .tmp/dev-stage/runs --output .tmp/dev/evaluation.md`.
+При достаточной квоте Codex можно передать `--jobs 2`. Тогда в каждом дочернем процессе извлечение идёт в один поток. Для отдельной отладки доступна команда `python -m scripts.evaluate --split dev --repeat 1 --runs-dir .tmp/dev-stage/runs --output .tmp/dev/evaluation.md`.
 
-По окончании доступны `reports/evaluation.md`, `reports/evaluation-manual.md`, паспорта запусков и индивидуальные отчёты в `reports/benchmark-runs/`. Повторно рассчитать показатели по уже собранным результатам без запросов к модели можно так:
+По окончании в `reports/local/` появятся оценка, разбор незачтённых карточек и каталог `benchmark-runs/` с индивидуальными отчётами и паспортами. Повторно рассчитать показатели по уже собранным результатам без запросов к модели можно такой командой.
 
 ```sh
-python -m scripts.evaluate --import-dir reports/benchmark-runs --repeat 3 --output reports/evaluation.md
+python -m scripts.evaluate --import-dir reports/jury/benchmark-runs --repeat 3 --output .tmp/evaluation.md
 ```
 
 Для импорта нужен файл `<каталог>/<case>/r<N>/report.md` на каждую пару документа и повтора. ID документов: `dispatch`, `dispatch-base`, `irrigation`, `irrigation-base`, `subtitles`, `subtitles-base`, `indicator`. Для каждой исходной версии используется суффикс `-base`. Файл `report/run-meta.json` рядом с отчётом содержит метрики. Перед вызовами модели оценщик проверяет чистоту клона и возможность перенести отчёты из `.tmp/benchmark-runs/` в `reports/benchmark-runs/` с сохранением относительных ссылок на вход. После переноса он повторно проверяет паспорт, SHA-256 отчёта и вложенную ссылку на документ. При импорте исторических отчётов без полных метрик оценка явно помечается как диагностическая.

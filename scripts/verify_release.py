@@ -1,6 +1,7 @@
 """Check the published run metadata, immutable input bytes and complete source citations."""
 import argparse
 import hashlib
+import html
 import json
 from pathlib import Path
 import re
@@ -14,8 +15,111 @@ from scripts.verify_report import verify
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def verify_choices(proposal, body, location):
+    parts = re.split(r'^\s*(\d+)\. \*\*Вариант (\d+)\.\*\* ', proposal, flags=re.M)
+    if '**Вопрос для решения.** ' not in parts[0] or len(parts) < 7:
+        raise ValueError(f'{location}: отсутствует вопрос или два варианта решения')
+    before = body.split('**Предложение для автора.**', 1)[0]
+    evidence = set()
+    for ident, block in re.findall(r'^\[(R-[\w-]+)\]\(#r-[\w-]+\) · [^\n]+\n\n((?:> [^\n]*(?:\n|$))+)', before, re.M):
+        quote = '\n'.join(line[2:].removesuffix('  ') for line in block.splitlines())
+        evidence.add(f'[{ident}](#{ident.lower()}) «{quote}».')
+    outcomes = set()
+    for index in range(1, len(parts), 3):
+        number, label, branch = parts[index:index+3]
+        if number != label or number != str(index // 3 + 1):
+            raise ValueError(f'{location}: нарушена нумерация вариантов')
+        grounding = re.search(r'^\s*\*\*Основание\.\*\* (.+?)\n\n\s*\*\*Ожидаемый результат\.\*\*', branch, re.M | re.S)
+        outcome = re.search(r'^\s*\*\*Ожидаемый результат\.\*\* (\S.*)', branch, re.M)
+        if not grounding or grounding[1] not in evidence or not outcome or not branch.partition('\n')[0].strip():
+            raise ValueError(f'{location}: варианту требуется формулировка, своё основание и наблюдаемый результат')
+        outcomes.add(' '.join(outcome[1].casefold().split()))
+    if len(outcomes) != (len(parts)-1) // 3:
+        raise ValueError(f'{location}: в разных вариантах повторён один ожидаемый результат')
+
+
+def _question_key(value):
+    return tuple(re.findall(r'\w+', html.unescape(value).casefold()))
+
+
+def _check_blocking_groups(text, cards, report):
+    section = text.partition('## Вопросы к автору ТЗ\n')[2].partition('<a id="findings">')[0]
+    open_ids = {ident for ident, (_, body) in cards.items() if '**Что нужно уточнить.** ' in body}
+    for row in re.finditer(r'^Блокирует приёмку · ([^\n]*)$', section, re.M):
+        links, separator, _ = row[1].partition('. Зависимый сценарий — ')
+        ids = re.findall(r'\[(Z-\d+)\]', links)
+        if (not separator or not ids or len(set(ids)) != len(ids) or not set(ids) <= cards.keys()
+                or links != ', '.join(f'[{i}](#{i.lower()})' for i in ids)):
+            raise ValueError(f'{report}: неверный список карточек блокирующего вопроса')
+        if not open_ids.intersection(ids):
+            continue
+        heading = section[:row.start()].rstrip().split('\n')[-1]
+        match = re.fullmatch(r'\*\*(.+)\*\*', heading)
+        if not match:
+            raise ValueError(f'{report}: отсутствует текст блокирующего вопроса')
+        question = _question_key(match[1])
+        # The rendered flag belongs to a group (logical OR). No individual flag
+        # is present in this format. Require visible support from a different card.
+        for ident in set(ids) - open_ids:
+            title, body = cards[ident]
+            status = body.partition('\n')[0]
+            if not re.match(r'^\*\*(?:Дефект|Неоднозначность|Предполагаемый пробел) · [^·\n]+ · (?:Критичная|Существенная)\.\*\*', status):
+                continue
+            evidence = body.partition('**Предложение для автора.**')[0]
+            if not re.search(r'^\[R-[\w-]+\]\(#r-[\w-]+\) · [^\n]+\n\n> \S', evidence, re.M):
+                continue
+            explicit = re.search(r'^\*\*Вопрос для решения\.\*\* ([^\n]+)', body, re.M)
+            # Counted findings publish their own question in the proposal. A
+            # gap may only expose it in the title of the card.
+            if not explicit and not status.startswith('**Предполагаемый пробел ·'):
+                continue
+            if _question_key(explicit[1] if explicit else title) == question:
+                break
+        else:
+            raise ValueError(f'{report}: у открытой предпосылки в блокирующей группе {links} нет другого основания для блокирования')
+
+
+def verify_proposals(text, report, version=1):
+    matches = re.findall(r'^### (Z-\d+) · ([^\n]+)\n\n(.*?)(?=^<a id=|\Z)', text, re.M | re.S)
+    cards = {ident: (title, body) for ident, title, body in matches}
+    if len(matches) != len(cards):
+        raise ValueError(f'{report}: повторяется ID карточки')
+    if version == 2:
+        _check_blocking_groups(text, cards, report)
+    checked = 0
+    for ident, (_, body) in cards.items():
+        if version == 2:
+            premise = '**Что нужно уточнить.** ' in body
+            conditional = '**Как ответ изменит приёмку.** ' in body
+            if premise != conditional or (premise and not body.startswith('**Предполагаемый пробел ·')):
+                raise ValueError(f'{report}: {ident} не согласованы статус вопроса, предпосылка и проверка')
+            if premise and ' · Критичная.**' in body.partition('\n')[0]:
+                raise ValueError(f'{report}: {ident} открытая предпосылка помечена критичной')
+        if not body.startswith(('**Дефект ·', '**Неоднозначность ·')):
+            continue
+        internal_conflict = body.startswith('**Дефект · Противоречивость ·') and '**Внешнее основание.**' not in body
+        if version == 2 and internal_conflict:
+            condition = re.search(r'^\*\*Общее условие\.\*\* (\S.+?) Основания — (.+?)(?=\n\n|\Z)', body, re.M | re.S)
+            if not condition or len(set(re.findall(r'\[(R-[\w-]+)\]', condition[2]))) < 2:
+                raise ValueError(f'{report}: {ident} для общего условия требуется опора на обе стороны конфликта')
+        proposal = re.search(r'^\*\*Предложение для автора\.\*\* .+?\n\n(.+?)\n\n\*\*Черновик приёмочного теста\.\*\* (\S[^\n]*)', body, re.M | re.S)
+        if not proposal:
+            raise ValueError(f'{report}: {ident} не содержит предложения и теста')
+        if version == 2 and ('**Вариант 1.**' in proposal[1] or body.startswith('**Неоднозначность ·') or internal_conflict):
+            verify_choices(proposal[1], body, f'{report}: {ident}')
+        elif version == 1 and body.startswith('**Неоднозначность ·'):
+            branches = re.findall(r'^\d+\. Для трактовки (\d+) закрепить правило ', proposal[1], re.M)
+            interpretations = re.findall(r'^\d+\. ', body.split('**Предложение для автора.**', 1)[0], re.M)
+            if len(branches) < 2 or branches != [str(i + 1) for i in range(len(interpretations))]:
+                raise ValueError(f'{report}: {ident} не для каждой трактовки указано своё предложение')
+        checked += 1
+    return checked
+
+
 def inspect_run(metadata):
     meta = json.loads(metadata.read_text(encoding='utf-8'))
+    if meta.get('model') != 'gpt-6.2-sol' or meta.get('provider') != 'OpenAI через Codex CLI':
+        raise ValueError(f'{metadata.name}: для комплекта требуется gpt-6.2-sol через Codex CLI')
     report = metadata.parent.parent / meta['report']
     if report.resolve().parent != metadata.resolve().parent.parent:
         raise ValueError(f'{metadata}: неправильный путь отчёта')
@@ -38,6 +142,12 @@ def inspect_run(metadata):
             or f'| Провайдер и модель | {meta["provider"]} · `{meta["model"]}` |' not in text):
         raise ValueError(f'{report}: паспорт версии или модели расходится с метриками')
     counts = verify(report, source)
+    version = meta.get('report_format_version', 1)
+    if version not in (1, 2):
+        raise ValueError(f'{report}: неизвестная версия формата отчёта {version!r}')
+    counts['proposals_checked'] = verify_proposals(text, report, version)
+    if counts['proposals_checked'] != counts['defects']:
+        raise ValueError(f'{report}: число предложений с тестом не совпало с числом нарушений')
     for name in ('requirements', 'defects', 'critical_defects', 'questions', 'blocking_questions'):
         if counts[name] != meta['counts'][name]:
             raise ValueError(f'{report}: различаются счётчики {name}')

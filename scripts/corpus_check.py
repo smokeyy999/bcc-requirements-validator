@@ -125,8 +125,8 @@ def main():
         summarize(dest, corpus)
         return 0
     settings = _read_settings(checkout / ".env")
-    config = {key: settings.get(key) for key in ("LLM_PROVIDER", "LLM_MODEL", "CODEX_EXTRACT_WORKERS",
-                                                 "GEMINI_REQUESTS_PER_MINUTE")}
+    config = {key: settings.get(key, default) for key, default in (
+        ("LLM_PROVIDER", "codex"), ("LLM_MODEL", "gpt-6.2-sol"), ("CODEX_EXTRACT_WORKERS", "2"))}
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, text=True).strip()
     results = [run_case(name, dest, args.resume, commit, config, checkout) for name in ([args.case] if args.case else CASES)]
     if not args.case:

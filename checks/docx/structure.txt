@@ -1,0 +1,6 @@
+> python -m scripts.check_docx docs/requirements.md checks/docx/requirements-copy.docx --verify-only
+DOCX: paragraphs=78, tables=7, data_rows=43, code=7, source_ids=18, verified_locators=87.
+Exit 0
+Original Markdown SHA-256: e7dae55e5453a250d93e335f5ff9c7f775f4457ccddd333f4a67e47b20d74381
+Native DOCX SHA-256: 8b3c5b9a7cd993c94d92fa6cd4abcf898240e4c03a0d4f87868c5c5aa402955d
+Microsoft Word PDF preview: 4 pages.

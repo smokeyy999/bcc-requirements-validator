@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from requirements_validator.engine import AUDIT, GLOBAL, LOCAL, OPERATION, PATCH, VALUE, review
+from requirements_validator.report import author_proposal
 
 
 def agreed_audit():
@@ -14,7 +15,10 @@ def agreed_audit():
     return {
         "decisions": [{"id": "Z-001", "action": "оставить", "basis": "Прямое обязательство",
                        "severity": "Критичная", "reason": "Цена отмены за сутки имеет два исхода.",
-                       "blocking": True, "supports": [], "question_mode": "сохранить", "question": "", "test": ""}],
+                       "blocking": True, "supports": [], "question_mode": "сохранить", "question": "", "test": "",
+                       "case_check": {"status": "подтверждено", "condition": "Бронь отменяют за сутки.",
+                                      "effect": "", "anchors": [{"id": "R-M01-01", "quote": "за сутки"},
+                                                                  {"id": "R-M02-01", "quote": "за сутки"}]}}],
         "assessment": "Правила отмены устанавливают разные суммы.",
         "readiness": "Проверка суммы при отмене требует решения владельца.",
         "priorities": [{"ids": ["Z-001"], "step": "Уточнить плату за отмену."}],
@@ -70,7 +74,10 @@ class TestReview(unittest.TestCase):
             "consequence": "Тест отмены ожидает одновременно нулевое и ненулевое списание.",
             "evidence": [{"id": "R-M01-01", "quote": self.first},
                          {"id": "R-M02-01", "quote": self.third}],
-            "interpretations": [], "question": "Удерживать плату за отмену за сутки?",
+            "interpretations": [
+                dict(id="R-M01-01", quote="", reading="Разрешить бесплатную отмену за сутки.", effect="Плата не списана."),
+                dict(id="R-M02-01", quote="", reading="При отмене за сутки удержать плату.", effect="Плата списана."),
+            ], "question": "Удерживать плату за отмену за сутки?",
             "test": "Отмена за сутки до начала.", "blocking": True, "fix": "", "reference": "",
         }
         self.whole = {
@@ -104,6 +111,33 @@ class TestReview(unittest.TestCase):
         self.assertEqual([schema for _, schema in provider.calls], [LOCAL, GLOBAL, AUDIT])
         self.assertIn(self.blocks[-1].text, provider.calls[-1][0])
 
+    def test_contradiction_proposes_two_cited_choices_with_separate_acceptance_outcomes(self):
+        result = review(self.document, Responses(self.local, self.whole))
+        [finding] = result["findings"]
+        proposal = "\n".join(author_proposal(finding))
+        self.assertIn(self.issue["question"], proposal)
+        for number, option in enumerate(self.issue["interpretations"], 1):
+            chosen = proposal.split(f"{number}. **Вариант {number}.** ", 1)[1].split("\n2. **Вариант", 1)[0]
+            self.assertIn(option["reading"], chosen)
+            self.assertIn("**Ожидаемый результат.** " + option["effect"], chosen)
+            self.assertIn("**Основание.** [" + option["id"] + "]", chosen)
+            other = self.issue["interpretations"][2-number]["id"]
+            self.assertIn("привести в соответствие [" + other + "]", chosen)
+        self.assertNotIn("[условиях данного сценария]", proposal)
+
+    def test_decision_rejects_an_unfounded_number_or_the_same_rule_on_both_sides(self):
+        for field, value in (("reading", "При отмене удержать 37 процентов."),
+                             ("id", self.issue["interpretations"][0]["id"])):
+            answer = copy.deepcopy(self.whole)
+            answer["findings"][0]["interpretations"][1][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "числовая константа|разные ID"):
+                review(self.document, Responses(self.local, answer, answer))
+
+    def test_internal_conflict_needs_choices_even_when_the_prose_describes_a_repair(self):
+        self.issue.update(interpretations=[], fix="Отменить плату.")
+        with self.assertRaisesRegex(ValueError, "два варианта решения"):
+            review(self.document, Responses(self.local, self.whole, self.whole))
+
     def test_separate_standard_reference_for_requested_operation_effect(self):
         method = "Клиент вызывает стандартный HTTP HEAD /reserve."
         effect = "Операция по запросу клиента оформляет новую бронь."
@@ -113,7 +147,7 @@ class TestReview(unittest.TestCase):
             dict(self.local["claims"][0], block=b.id, quote=b.text, summary=b.text, trace="локально")
             for b in self.blocks[:2]
         ]
-        self.issue.update(topic="Семантика бронирования", reference="safe",
+        self.issue.update(topic="Семантика бронирования", reference="safe", interpretations=[],
                           reason="Выбранная операция несовместима с намерением оформить бронь.",
                           evidence=[{"id": "R-M01-01", "quote": method}, {"id": "R-M02-01", "quote": effect}])
         self.whole["scope"]["values"] = "R-M02-01 — действие оформления."
@@ -122,7 +156,10 @@ class TestReview(unittest.TestCase):
         self.whole["traces"] = [
             dict(aspect=OPERATION, subjects=["R-M01-01"], supports=["R-M02-01"],
                  reasoning="Клиент требует создания брони.", finding_topic=self.issue["topic"])]
-        provider = Responses(self.local, self.whole)
+        audit = agreed_audit()
+        audit["decisions"][0]["case_check"].update(condition="Вызов HEAD оформляет бронь.",
+                                                    anchors=self.issue["evidence"])
+        provider = Responses(self.local, self.whole, audits=[audit])
         result = review(self.document, provider)
         ref = result["findings"][0]["reference"]
         self.assertEqual(ref["url"], "https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.1")
@@ -141,7 +178,7 @@ class TestReview(unittest.TestCase):
                  trace=VALUE if i == 0 else "локально")
             for i, b in enumerate(self.blocks[:2])
         ]
-        self.issue.update(kind="Предполагаемый пробел", category="Трассируемость",
+        self.issue.update(kind="Предполагаемый пробел", category="Трассируемость", interpretations=[],
                           topic="Источник числа гостей", evidence=[{"id": "R-M01-01", "quote": ""}],
                           question="Откуда терминал узнаёт число гостей?", test="Сверка при входе гостя.")
         trace = dict(aspect=VALUE, subjects=["R-M01-01"], supports=[],
@@ -152,7 +189,9 @@ class TestReview(unittest.TestCase):
             with self.subTest(wrong_topic=wrong_topic), self.assertRaisesRegex(ValueError, "/traces/0"):
                 review(self.document, Responses(self.local, self.whole, self.whole))
         trace["finding_topic"] = self.issue["topic"]
-        result = review(self.document, Responses(self.local, self.whole))
+        audit = agreed_audit()
+        audit["decisions"][0]["case_check"] = {"status": "не применимо", "condition": "", "effect": "", "anchors": []}
+        result = review(self.document, Responses(self.local, self.whole, audits=[audit]))
         self.assertEqual(result["counts"]["gaps"], 1)
         self.assertEqual(result["counts"]["defects"], 0)
 
@@ -248,7 +287,38 @@ class TestReview(unittest.TestCase):
         self.assertEqual(claim["findings"], ["Z-001"])
         self.assertIn("Срок отмены прямо указан.", claim["assessment"])
         self.assertIn(result['findings'][0]['reason'], claim['assessment'])
-        self.assertEqual(claim["status"], "Выявлено нарушение")
+        self.assertEqual(claim["status"], "Связано с нарушением в спецификации")
+
+    def test_context_citation_does_not_invalidate_its_rule_or_publish_a_local_guess(self):
+        self.issue["evidence"].append({"id": "R-M01-02", "quote": self.second})
+        self.local["claims"][0]["assessment"] = "Нужно изменить вместимость зала."
+        result = review(self.document, Responses(self.local, self.whole))
+        context = result["requirements"][1]
+        self.assertEqual(context["status"], "Связано с нарушением в спецификации")
+        self.assertEqual(context["findings"], ["Z-001"])
+        self.assertEqual(context["assessment"], result["findings"][0]["reason"])
+        self.assertEqual(result["counts"]["defects"], 1)
+
+    def test_downgraded_card_cannot_erase_or_duplicate_an_independent_finding(self):
+        self.whole["findings"].append(dict(
+            self.issue, topic="Условия по вместимости", kind="Предполагаемый пробел", category="Полнота",
+            severity="Низкая", interpretations=[], blocking=False,
+            evidence=[{"id": "R-M01-02", "quote": self.second}, {"id": "R-M01-01", "quote": self.first}]))
+        audit = agreed_audit()
+        audit["decisions"].append(dict(
+            audit["decisions"][0], id="Z-002", action="уточнить", basis="Обоснованное ожидание",
+            severity="Низкая", reason="Указана вместимость, условия рассадки открыты.", blocking=False,
+            supports=["R-M01-02"], question_mode="заменить", question="Как расставляются места?",
+            test="Проверить рассадку по выбранной схеме.",
+            case_check=dict(status="требует ответа", condition="Какая схема рассадки применима?",
+                            effect="При разных схемах число доступных мест может различаться.",
+                            anchors=[{"id": "R-M01-02", "quote": self.second}])))
+        self.whole["resolved"] = [{"id": "R-M01-01", "reason": audit["decisions"][0]["reason"]}]
+        first, capacity, _ = review(self.document, Responses(self.local, self.whole, audits=[audit]))["requirements"]
+        self.assertEqual(first["findings"], ["Z-001"])
+        self.assertEqual(first["assessment"], audit["decisions"][0]["reason"])
+        self.assertEqual(capacity["findings"], ["Z-002"])
+        self.assertEqual(capacity["assessment"], audit["decisions"][1]["reason"])
 
     def test_patch_cannot_overwrite_good_results(self):
         self.local["claims"][0]["status"] = "проверить"
@@ -295,11 +365,11 @@ class TestReview(unittest.TestCase):
             review(self.document, Responses(self.local, self.whole, self.whole))
 
     def test_gap_excluded_from_defect_count(self):
-        self.issue.update(kind="Предполагаемый пробел", category="Полнота")
+        self.issue.update(kind="Предполагаемый пробел", category="Полнота", interpretations=[])
         result = review(self.document, Responses(self.local, self.whole))
         self.assertEqual(result["counts"]["defects"], 0)
         self.assertEqual(result["counts"]["gaps"], 1)
-        self.assertEqual(result["requirements"][0]["status"], "Недостаточно данных")
+        self.assertEqual(result["requirements"][0]["status"], "Связано с вопросом к автору")
 
     def test_retracted_candidate_leaves_no_issue_or_question(self):
         audit = agreed_audit()
@@ -322,6 +392,10 @@ class TestReview(unittest.TestCase):
                                      severity="Низкая", reason="Размер суммы упоминается для одного условия.",
                                      supports=["R-M02-01"], question_mode="заменить",
                                      question="К какому условию относится удержание?", test="Отмена зала за сутки.")
+        audit["decisions"][0]["case_check"].update(
+            status="требует ответа", condition="При каких условиях возникает плата?",
+            anchors=[{"id": "R-M02-01", "quote": "удержать плату"}],
+            effect="Если условие выполнено, проверяют удержание. Иначе надо определить исход отмены.")
         result = review(self.document, Responses(self.local, self.whole, audits=[audit]))
         [f] = result["findings"]
         self.assertEqual(result["counts"]["defects"], 0)

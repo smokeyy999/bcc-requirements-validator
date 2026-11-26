@@ -11,39 +11,9 @@ from requirements_validator import __main__ as cli
 from requirements_validator import engine
 from requirements_validator import provider as api
 from requirements_validator.metrics import RunMetrics, purpose, stage, transport
-from tests.test_provider import http_error, reply
 
 
 class RunMeasurementsTest(unittest.TestCase):
-    def test_google_real_response_fields_and_bounded_rate(self):
-        google = api.Gemini("test-secret", "test-model", rpm=5)
-        success = reply({"usageMetadata": {"promptTokenCount": 33, "candidatesTokenCount": 4,
-                         "thoughtsTokenCount": 2, "totalTokenCount": 39}, "modelVersion": "served-version",
-                         "candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": "{}"}]}}]})
-        run = RunMetrics()
-        with run.capture(), patch.object(api.time, "monotonic", side_effect=[100, 103, 112]), \
-                patch.object(api.time, "sleep") as wait, \
-                patch.object(api.request, "urlopen", side_effect=[http_error(429, "retry", "3"), success]) as send:
-            stage("adjudication")
-            with purpose("validation_patch"):
-                google.ask("hidden-content", api.PROBE_SCHEMA)
-        result = run.summary()
-        self.assertEqual([call.args[0] for call in wait.call_args_list], [3, 9])
-        self.assertEqual([r["ok"] for r in result["requests"]], [False, True])
-        self.assertEqual(result["model_calls"], 2)
-        self.assertEqual(result["transport_retries"], 1)
-        self.assertEqual(result["repair_model_calls"], 1)
-        self.assertEqual(result["retry_model_calls"], 2)
-        self.assertIsNone(result["tokens"]["input_tokens"])  # HTTP 429 had no usage information
-        self.assertEqual(result["requests"][1]["input_tokens"], 33)
-        self.assertEqual(result["requests"][1]["output_tokens"], 4)
-        self.assertEqual(result["requests"][1]["reasoning_tokens"], 2)
-        self.assertNotIn("hidden-content", json.dumps(result))
-        self.assertNotIn("test-secret", json.dumps(result))
-        config = json.loads(send.call_args.args[0].data)["generationConfig"]
-        self.assertEqual((config["temperature"], config["seed"]), (0.2, 42))
-        self.assertEqual(google.configuration()["model_version_reported"], "served-version")
-
     def test_codex_usage_is_captured_from_turn_event_only(self):
         def respond(command, **kwargs):
             self.assertIn("--json", command)
@@ -58,7 +28,7 @@ class RunMeasurementsTest(unittest.TestCase):
         run = RunMetrics()
         with patch.object(api.shutil, "which", return_value="codex"), run.capture(), \
                 patch.object(api.subprocess, "run", side_effect=respond):
-            api.Codex("test").ask("private result", api.PROBE_SCHEMA)
+            api.Codex().ask("private result", api.PROBE_SCHEMA)
         summary = run.summary()
         self.assertEqual(summary["tokens"], {"input_tokens": 20, "output_tokens": 7,
                                              "cached_input_tokens": 13, "reasoning_tokens": None})
@@ -99,11 +69,11 @@ class RunMeasurementsTest(unittest.TestCase):
     def test_sidecar_belongs_to_exact_saved_report_even_with_two_output_names(self):
         from unittest.mock import Mock
         fixture = Path(__file__).parent / "fixtures" / "locker.md"
-        google = Mock()
-        google.name = google.model = "fixture"
-        google.configuration.return_value = {"requested_model": "fixture"}
+        provider = Mock()
+        provider.name = provider.model = "fixture"
+        provider.configuration.return_value = {"requested_model": "fixture"}
         result = {"counts": {"requirements": 0, "defects": 0, "questions": 0}, "findings": [], "questions": []}
-        with tempfile.TemporaryDirectory() as folder, patch.object(cli, "get_provider", return_value=google), \
+        with tempfile.TemporaryDirectory() as folder, patch.object(cli, "get_provider", return_value=provider), \
                 patch.object(cli, "review", return_value=result), patch.object(cli, "render", return_value="Проверка\n"):
             for stem in ("first", "second"):
                 report = Path(folder) / f"{stem}.md"

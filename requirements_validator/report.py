@@ -22,27 +22,48 @@ def refs(ids):
 
 
 def author_proposal(finding):
-    """Normative drafts retain the cited clause verbatim. Business choices stay explicit."""
+    """Keep each proposed choice next to its source and testable outcome."""
     if not finding["counted"]:
         return []
     evidence = finding["evidence"]
+    test = plain(finding.get("test") or finding["scenario"])
     result = ["**Предложение для автора.** Предложение модели. Выбор формулировки и ожидаемого результата утверждает автор ТЗ."]
-    options = finding.get("proposal_anchors", [])
+    options = finding.get("proposal_options", [])
+    if finding.get("question"):
+        result.append("**Вопрос для решения.** " + plain(finding["question"]))
     if options:
-        for number, anchor in enumerate(options, 1):
+        for number, option in enumerate(options, 1):
+            anchor = option["anchor"]
+            if anchor not in evidence:
+                raise ValueError("У предложения отсутствует проверенная цитата")
+            text = (f'{number}. **Вариант {number}.** {cell(option["reading"])}\n\n'
+                    f'   **Основание.** {refs([anchor["id"]])} «{plain(anchor["quote"])}».\n\n'
+                    f'   **Ожидаемый результат.** {cell(option["effect"])}')
+            if finding["kind"] == "Дефект":
+                other_ids = [o["anchor"]["id"] for o in options if o["anchor"]["id"] != anchor["id"]]
+                text += f'\n\n   При выборе этого варианта привести в соответствие {refs(other_ids)}.'
+            result.append(text)
+    elif finding.get("proposal_anchors"):
+        # Ранее сохранённый объект содержит только буквальные основания без отдельных исходов.
+        for number, anchor in enumerate(finding["proposal_anchors"], 1):
             if anchor not in evidence:
                 raise ValueError("У предложения отсутствует проверенная цитата")
             result.append(f'{number}. Для трактовки {number} закрепить правило {refs([anchor["id"]])} '
                           f'«{plain(anchor["quote"])}». Указать условие применения этого варианта в критерии приёмки.')
     elif finding.get("reference"):
-        result.append(f'Согласовать способ вызова и ожидаемый эффект в {refs(finding["ids"])}. '
-                      'В контракте и примере зафиксировать выбранную операцию и проверить её по указанному внешнему правилу.')
-    elif finding["fix"] and any(finding["fix"] == e["quote"] for e in evidence):
-        result.append(f'Закрепить проверенную формулировку «{plain(finding["fix"])}».')
+        result.append(f'Привести контракт и пример {refs(finding["ids"])} в соответствие с правилом '
+                      f'«{plain(finding["reference"]["rule"])}». Проверяемое поведение — {plain(finding["scenario"])}')
+        if not finding.get("test"):
+            test = (f'Сверить исправленный контракт {refs(finding["ids"])} с внешним правилом '
+                    f'«{plain(finding["reference"]["rule"])}». Проверить, что описанный эффект ему соответствует.')
+    elif finding["fix"] and ("proposal_options" in finding or any(finding["fix"] == e["quote"] for e in evidence)):
+        result.append(f'Проект правки по {refs(finding["ids"])} — {plain(finding["fix"])}')
+        if not finding.get("test"):
+            test = (f'Открыть исправленные пункты {refs(finding["ids"])} и проверить выполнение '
+                    f'предложенной правки «{plain(finding["fix"])}».')
     else:
-        result.append(f'Согласовать {refs(finding["ids"])}. Черновик для заполнения автором — '
-                      '«При [условиях данного сценария] ожидается [один согласованный исход]».')
-    result.append('**Черновик приёмочного теста.** ' + plain(finding.get('test') or finding['scenario']))
+        result.append(f'Внести ответ на этот вопрос в {refs(finding["ids"])} для сценария «{plain(finding["scenario"])}».')
+    result.append('**Черновик приёмочного теста.** ' + test)
     return result
 
 
@@ -136,10 +157,19 @@ def render(doc, result, run, source_path, output_path):
         if reference:
             parts.append(f'**Внешнее основание.** {plain(reference["rule"])} '
                          f'[{plain(reference["title"])}]({reference["url"]})')
-        for field, label in (("scenario", "Сценарий"), ("consequence", "Последствие")):
-            if f[field]:
-                parts.append(f'**{label}.** {plain(f[field])}')
-        if f["interpretations"]:
+        open_premise = f.get("open_premise")
+        if f["scenario"]:
+            parts.append(f'**Сценарий.** {plain(f["scenario"])}')
+        if f["consequence"] and (not open_premise or f["consequence"] != open_premise["effect"]):
+            parts.append(f'**Последствие.** {plain(f["consequence"])}')
+        if open_premise:
+            parts.append("**Что нужно уточнить.** " + plain(open_premise["condition"]))
+            parts.append("**Как ответ изменит приёмку.** " + plain(open_premise["effect"]))
+        if f.get("shared_premise"):
+            premise = f["shared_premise"]
+            sources = ", ".join(f'{refs([a["id"]])} «{plain(a["quote"])}»' for a in premise["anchors"])
+            parts.append(f'**Общее условие.** {plain(premise["condition"])} Основания — {sources}.')
+        if f["interpretations"] and not f.get("proposal_options"):
             parts.append("\n".join(f'{i}. {plain(t)}' for i, t in enumerate(f["interpretations"], 1)))
         if f["fix"] and not f["counted"]:
             parts.append("**Исправление по тексту документа.** " + plain(f["fix"]))

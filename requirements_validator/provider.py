@@ -1,20 +1,18 @@
-"""Последовательные обращения к Gemini REST и авторизованному Codex CLI."""
+"""Обращения к gpt-6.2-sol через авторизованный Codex CLI."""
 
 import json
-import math
 import os
-from contextlib import nullcontext
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import tempfile
-import time
-from urllib import error, parse, request
 
-from .metrics import counts, purpose, transport
+from .metrics import counts, transport
+
+
+MODEL = "gpt-6.2-sol"
+
 
 class ProviderError(ValueError):
     """Сообщение для пользователя без ключей, запросов и ответов транспорта."""
@@ -48,7 +46,7 @@ def _object(text):
 
 
 def _read_settings(path):
-    keys = {"LLM_PROVIDER", "LLM_MODEL", "GEMINI_API_KEY", "GEMINI_REQUESTS_PER_MINUTE", "CODEX_EXTRACT_WORKERS"}
+    keys = {"LLM_PROVIDER", "LLM_MODEL", "CODEX_EXTRACT_WORKERS"}
     settings = {}
     if path.is_file():
         try:
@@ -67,192 +65,12 @@ def _read_settings(path):
     return settings
 
 
-def _retry_after(value):
-    if not value:
-        return None
-    try:
-        seconds = float(value)
-    except ValueError:
-        try:
-            seconds = (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds()
-        except (ValueError, TypeError, OverflowError):
-            return None
-    return max(0, seconds) if math.isfinite(seconds) else None
-
-
-def _quota(body):
-    """Structured google.rpc details distinguish daily/zero quota and a short retry."""
-    try:
-        details = json.loads(body)["error"].get("details", [])
-    except (KeyError, TypeError, ValueError, AttributeError):
-        details = []
-    exhausted = bool(re.search(r"per[ _-]?day|(?:limit|quota)\s*:\s*0\b", body))
-    delay = None
-    for detail in details if isinstance(details, list) else []:
-        if not isinstance(detail, dict):
-            continue
-        violations = detail.get("violations")
-        for rule in violations if isinstance(violations, list) else []:
-            if isinstance(rule, dict) and (str(rule.get("quotavalue")) == "0" or
-                                          str(rule.get("quotalimitvalue")) == "0"):
-                exhausted = True
-        duration = re.fullmatch(r"(\d+(?:\.\d+)?)s", str(detail.get("retrydelay", "")))
-        if duration:
-            delay = _retry_after(duration[1])
-    return exhausted, delay
-
-
-class Gemini:
-    name = "Gemini API"
-    keyed_review = True
-    endpoint = "https://generativelanguage.googleapis.com/v1beta/"
-
-    def __init__(self, key, model, rpm=10):
-        if not key:
-            raise ProviderError("Отсутствует GEMINI_API_KEY. Задайте ключ в .env или переменной окружения.")
-        self._key = key
-        self._requested_model = self.model = model
-        self._version = None
-        self.rpm = rpm
-        self._last_generation = None
-
-    def configuration(self):
-        return {"requested_model": self._requested_model, "model_version_reported": self._version,
-                "api": "v1beta.generateContent", "temperature": 0.2, "seed": 42,
-                "analysis_thinking_level": "HIGH" if self._requested_model == "gemini-3.5-flash-lite" else None,
-                "requests_per_minute": self.rpm, "extract_workers": 1, "max_local_batch_blocks": 14,
-                "coverage_batch_size": 10, "adjudication_batch_size": 6,
-                "tokens_source": "usageMetadata: input=promptTokenCount, output=candidatesTokenCount; thoughts reported separately"}
-
-    def _pace(self):
-        if self._last_generation is not None:
-            wait = self._last_generation + 60 / self.rpm - time.monotonic()
-            if wait > 0:
-                time.sleep(wait)
-        self._last_generation = time.monotonic()
-
-    def _request(self, path, payload=None):
-        body = json.dumps(payload, ensure_ascii=False).encode() if payload is not None else None
-        message = request.Request(self.endpoint + path, data=body, headers={
-            "Content-Type": "application/json", "x-goog-api-key": self._key,
-        })
-        for attempt in range(4):
-            delay = 2 ** attempt
-            if payload is not None:
-                self._pace()
-            try:
-                with transport("generation" if payload is not None else "catalog", attempt + 1) as record:
-                    with request.urlopen(message, timeout=180) as response:
-                        result = _object(response.read())
-                        counts(record, result.get("usageMetadata"), {"input_tokens": "promptTokenCount",
-                               "output_tokens": "candidatesTokenCount", "reasoning_tokens": "thoughtsTokenCount",
-                               "cached_input_tokens": "cachedContentTokenCount", "total_tokens": "totalTokenCount"})
-                        return result
-            except error.HTTPError as exc:
-                record["http_status"] = exc.code
-                with exc:
-                    details = exc.read(65536).decode("utf-8", errors="replace").lower()
-                if exc.code in (401, 403) or "api_key_invalid" in details or "api key not valid" in details:
-                    raise ProviderError("Gemini отклонил доступ. Проверьте ключ, права и регион проекта.") from None
-                if exc.code == 404:
-                    raise ProviderError("Gemini не нашёл модель. Проверьте LLM_MODEL и доступ проекта.") from None
-                if exc.code == 429:
-                    exhausted, server_delay = _quota(details)
-                    if exhausted:
-                        raise ProviderError("Исчерпана дневная или нулевая квота Gemini. Откройте лимиты проекта "
-                                            "в AI Studio, проверьте выбранную модель и дождитесь обновления квоты.") from None
-                    retry_after = _retry_after(exc.headers.get("Retry-After") if exc.headers else None)
-                    if retry_after is None:
-                        retry_after = server_delay
-                    if retry_after is not None:
-                        delay = retry_after
-                    issue = "Gemini ответил HTTP 429: достигнут лимит частоты или квоты проекта"
-                elif exc.code in (408, 500, 502, 503, 504):
-                    issue = f"Временная ошибка Gemini (HTTP {exc.code})"
-                    delay = (5, 15, 40, 60)[attempt]
-                    retry_after = _retry_after(exc.headers.get("Retry-After") if exc.headers else None)
-                    if retry_after is not None:
-                        delay = retry_after
-                else:
-                    raise ProviderError(f"Gemini отклонил запрос (HTTP {exc.code}). Проверьте возможности модели и схему.") from None
-            except (error.URLError, TimeoutError, OSError) as exc:
-                reason = getattr(exc, "reason", exc)
-                issue = "Истёк таймаут Gemini" if isinstance(reason, TimeoutError) else "Нет соединения с Gemini"
-            exhausted = attempt >= 2 if not (record.get("http_status") in (408, 500, 502, 503, 504)) else attempt >= 3
-            if exhausted or delay > 60:
-                raise ProviderError(f"{issue}. Проверьте сеть и лимиты, повторите запуск через {math.ceil(delay)} с или позже.")
-            time.sleep(delay)
-
-    def probe(self):
-        token = ""
-        while True:
-            query = {"pageSize": 1000}
-            if token:
-                query["pageToken"] = token
-            result = self._request("models?" + parse.urlencode(query))
-            models = result.get("models", [])
-            if not isinstance(models, list):
-                raise ProviderError("Gemini вернул некорректный каталог моделей. Повторите запрос.")
-            if any(isinstance(m, dict) and m.get("name") == "models/" + self._requested_model
-                   and "generateContent" in m.get("supportedGenerationMethods", []) for m in models):
-                break
-            next_token = result.get("nextPageToken")
-            if not next_token or next_token == token:
-                raise ProviderError("LLM_MODEL отсутствует среди доступных моделей generateContent. Проверьте каталог AI Studio.")
-            token = next_token
-        if self.ask(PROBE_PROMPT, PROBE_SCHEMA) != {"answer": "READY"}:
-            raise ProviderError("Модель не прошла проверку формата. Проверьте LLM_MODEL.")
-
-    def ask(self, prompt, schema):
-        config = {"responseMimeType": "application/json", "responseJsonSchema": schema,
-                  "temperature": 0.2, "seed": 42}
-        if schema is not PROBE_SCHEMA and self._requested_model == "gemini-3.5-flash-lite":
-            config["thinkingConfig"] = {"thinkingLevel": "HIGH"}
-        for attempt in range(2):
-            with purpose("response_retry") if attempt else nullcontext():
-                result = self._request("models/" + self._requested_model + ":generateContent", {
-                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                    "generationConfig": config,
-                })
-            try:
-                return self._answer(result)
-            except _IncompleteAnswer as exc:
-                if attempt:
-                    raise ProviderError(str(exc) + " Повторите полный прогон или выберите другую модель.") from None
-                prompt += ("\n\nПредыдущая попытка вернула неполный или некорректный JSON. "
-                           "Сформируй заново полный объект по исходной схеме. Сохрани полный охват, "
-                           "формулируй лаконично. Не добавляй пояснения или Markdown вокруг JSON.")
-
-    def _answer(self, result):
-        version = result.get("modelVersion")
-        if version:
-            if self._version and self._version != version:
-                raise ProviderError("Gemini сменил версию модели между запросами. Повторите прогон.")
-            self.model = self._version = version
-        try:
-            candidate = result["candidates"][0]
-            if candidate["finishReason"] == "MAX_TOKENS":
-                raise _IncompleteAnswer("Gemini достиг лимита вывода.")
-            if candidate["finishReason"] != "STOP":
-                raise ProviderError("Gemini прервал генерацию. Проверьте лимит вывода и доступ модели.")
-            text = "".join(part["text"] for part in candidate["content"]["parts"] if not part.get("thought"))
-        except (AttributeError, KeyError, IndexError, TypeError) as exc:
-            raise ProviderError("Gemini не вернул законченный текст. Проверьте доступ и повторите прогон.") from exc
-        try:
-            return _object(text)
-        except ProviderError:
-            raise _IncompleteAnswer("Gemini вернул некорректный JSON.") from None
-
-
-class _IncompleteAnswer(ProviderError):
-    """Повторяется только повреждённый или обрезанный текст генерации."""
-
-
 class Codex:
     name = "OpenAI через Codex CLI"
 
-    def __init__(self, model, workers=1):
-        self.model = model
+    model = MODEL
+
+    def __init__(self, *, workers=2):
         self.extract_workers = workers
         self._executable = shutil.which("codex")
         if not self._executable:
@@ -260,7 +78,7 @@ class Codex:
 
     def probe(self):
         if self.ask(PROBE_PROMPT, PROBE_SCHEMA) != {"answer": "READY"}:
-            raise ProviderError("Модель не прошла проверку формата. Проверьте LLM_MODEL и codex login status.")
+            raise ProviderError("Модель не прошла проверку формата. Проверьте codex login status и доступ к gpt-6.2-sol.")
 
     def configuration(self):
         try:
@@ -330,19 +148,11 @@ class Codex:
 
 def get_provider():
     settings = _read_settings(Path(".env"))
-    name = settings.get("LLM_PROVIDER", "gemini").strip().lower()
-    defaults = {"gemini": "gemini-3.5-flash-lite", "codex": "gpt-6.2-sol"}
-    if name not in defaults:
-        raise ProviderError("Неизвестный LLM_PROVIDER. Укажите gemini или codex.")
-    model = settings.get("LLM_MODEL") or defaults[name]
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", model):
-        raise ProviderError("Проверьте LLM_MODEL. Укажите короткое имя модели из каталога провайдера.")
-    if name == "codex":
-        workers = settings.get("CODEX_EXTRACT_WORKERS", "1")
-        if workers not in {"1", "2"}:
-            raise ProviderError("CODEX_EXTRACT_WORKERS должен быть 1 или 2.")
-        return Codex(model, int(workers))
-    rpm = settings.get("GEMINI_REQUESTS_PER_MINUTE", "10")
-    if not re.fullmatch(r"[1-9]\d{0,2}", rpm):
-        raise ProviderError("Для GEMINI_REQUESTS_PER_MINUTE укажите целое число от 1 до 999.")
-    return Gemini(settings.get("GEMINI_API_KEY"), model, int(rpm))
+    if settings.get("LLM_PROVIDER", "codex").strip().lower() != "codex":
+        raise ProviderError("Для этой версии установите LLM_PROVIDER=codex или удалите переменную.")
+    if settings.get("LLM_MODEL", MODEL).strip() != MODEL:
+        raise ProviderError(f"Для этой версии установите LLM_MODEL={MODEL} или удалите переменную.")
+    workers = settings.get("CODEX_EXTRACT_WORKERS", "2")
+    if workers not in {"1", "2"}:
+        raise ProviderError("CODEX_EXTRACT_WORKERS должен быть равен 1 или 2.")
+    return Codex(workers=int(workers))

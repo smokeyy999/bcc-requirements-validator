@@ -7,6 +7,21 @@ from requirements_validator.source import read_document
 
 
 class ReferenceRenderingTest(unittest.TestCase):
+    def test_document_fix_checks_the_corrected_rule_instead_of_repeating_the_problem(self):
+        anchor = dict(id="R-M0001-01", quote="Лимит посетителей указан в разделе «Часы работы».")
+        finding = dict(counted=True, evidence=[anchor], ids=[anchor["id"]], proposal_options=[],
+                       fix="Поместить лимит в раздел «Вместимость».",
+                       scenario="Читатель находит лимит в разделе «Часы работы».", test="")
+        for rule in (None, dict(rule="Заголовок раздела должен обозначать его содержание.")):
+            with self.subTest(rule=rule):
+                finding["reference"] = rule
+                test = author_proposal(finding)[-1]
+                self.assertIn(anchor["id"], test)
+                self.assertIn(rule["rule"] if rule else finding["fix"], test)
+                self.assertNotIn(finding["scenario"], test)
+        finding["test"] = "Открыть раздел по новому названию и прочитать лимит."
+        self.assertIn(finding["test"], author_proposal(finding)[-1])
+
     def test_each_proposed_choice_retains_its_own_verified_clause(self):
         a = {'id': 'R-M0001-01', 'quote': 'При окончании смены дверь закрывается.'}
         b = {'id': 'R-M0003-01', 'quote': 'При окончании смены дверь остаётся открытой.'}
