@@ -1,5 +1,6 @@
 """Check whether an illustrated HTTP response actually identifies its triggering request."""
 
+import json
 import re
 
 
@@ -19,6 +20,15 @@ _STATUS_CHOICE = re.compile(r"(?:выбра\w*|согласован\w*)\s+(?:HTT
 _ASK_INPUT = re.compile(
     r"(?:как\w*|како\w*|каки\w*|чем|что|which|what).{0,55}(?:запрос|параметр|вход|услови|значен|request|input|parameter|condition|value)"
     r"|(?:запрос|параметр|вход|значен|request|input|parameter|value).{0,45}(?:вызыва|воспроиз|соответств|показан|пример|trigger|produce|example)", re.I)
+_MESSAGE_FIELDS = {"message", "description", "detail", "errordescription", "errormessage", "сообщение", "описание"}
+_TEXT = re.compile(r"текст|сообщени|формулировк|строк[уаие]|литерал|message|literal|wording|text", re.I)
+_EXACT = re.compile(r"дословн|в точности|буквальн|фиксированн|точн\w* текст|"
+                    r"verbatim|exact(?:ly)?|word.for.word|fixed (?:text|message)", re.I)
+_OBLIGATION = re.compile(r"долж|обяза|требу|равен|равна|равно|установи|возвраща|вернуть|"
+                         r"\b(?:shall|must|required|return|equals?)\b", re.I)
+_EXAMPLE = re.compile(r"образц|из пример|в пример|как в пример|according to the examples?|as (?:shown|illustrated)", re.I)
+_ASK_NORM = re.compile(r"(?:обязател\w*|требу\w*|долж\w*|нуж\w*|проверя\w*|входит|норматив\w*)\s+ли|"
+                       r"\b(?:is|must|does|should)\b.{0,60}\b(?:required|match|literal|verbatim)\b", re.I)
 
 
 def _has_request(block, status):
@@ -78,7 +88,43 @@ def unbound_response_examples(blocks):
     return examples
 
 
-def input_scope_error(finding, original, unbound):
+def _descriptive_literal(quote):
+    fenced = re.fullmatch(r"```(?:json)?\s*\n(.*)\n```", quote.strip(), re.I | re.S)
+    try:
+        body = json.loads(fenced[1] if fenced else quote)
+    except (ValueError, TypeError):
+        return ""
+    if not isinstance(body, dict) or len(body) != 1:
+        return ""
+    name, value = next(iter(body.items()))
+    return value if name.casefold().replace("_", "") in _MESSAGE_FIELDS and isinstance(value, str) else ""
+
+
+def _message_example_error(finding, evidence, unbound, outputs, rule_codes, source_quotes):
+    if not finding or finding.get("counted") or len(outputs) != 1 or outputs != rule_codes:
+        return ""
+    question = finding.get("question", "")
+    if not _ASK_INPUT.search(question) or (_ASK_NORM.search(question) and _TEXT.search(question)):
+        return ""
+    literals = {_descriptive_literal(e["quote"]) for e in evidence if e.get("block") in unbound}
+    if len(literals) != 1 or "" in literals:
+        return ""
+    literal = literals.pop()
+    observations = " ".join((question, finding.get("test", ""), *finding.get("question_basis", {}).get("outcomes", [])))
+    if literal.casefold() not in observations.casefold() and not (_EXACT.search(observations) and _TEXT.search(observations)):
+        return ""
+    for quote in source_quotes:
+        if _OBLIGATION.search(quote) and (literal.casefold() in quote.casefold() or
+                (_EXACT.search(quote) and _TEXT.search(quote) and _EXAMPLE.search(quote))):
+            return ""
+    return ("Класс входов и статус уже связаны правилом. Иллюстрация содержит только описательное "
+            "сообщение. Выбери action=снять, если отдельное сомнение касается лишь поиска запроса "
+            "для точного текста образца. Сохраняй вопрос о дословной проверке только при наличии "
+            "самостоятельного основания в источнике. Сначала уточни обязательность литерала; "
+            "отдельный вход требуется лишь при подтверждении автором.")
+
+
+def input_scope_error(finding, original, unbound, source_quotes=None):
     if not unbound:
         return ""
     evidence = original["evidence"]
@@ -98,7 +144,8 @@ def input_scope_error(finding, original, unbound):
     text = " ".join(original.get(key, "") for key in ("topic", "question", "test", "consequence", "reason"))
     rules = (rule_codes - outputs) & set(_CODE.findall(text))
     if not rules or not outputs.intersection(_CODE.findall(text)):
-        return ""
+        quotes = source_quotes.values() if source_quotes is not None else (e["quote"] for e in evidence)
+        return _message_example_error(finding, evidence, unbound, outputs, rule_codes, quotes)
     if (finding and not finding["counted"] and _ASK_INPUT.search(finding["question"])
             and rules.intersection(_CODE.findall(finding["test"])) and not _STATUS_CHOICE.search(finding["test"])):
         return ""
@@ -120,4 +167,11 @@ EXAMPLE_SCOPE_INSTRUCTION = """
 статус для входа из правила; отдельно, после ответа автора, воспроизведи пример с его исходным запросом.
 Не предлагай выбрать между статусами до установления общего входа. Общие расхождения схемы, типов
 и формата можно проверять независимо от примеров входа, когда контракт прямо распространяется на любой ответ.
+Одиночный пример обычного сообщения об ошибке может иллюстрировать уже заданный класс ответа.
+Прежде чем требовать отдельный вход для воспроизведения дословного текста, найди требование
+о точном литерале, противоречащий исход или иную проверку, которая изменится от ответа автора.
+Образец произвольного описательного сообщения сам по себе не устанавливает обязательный текст.
+Если в общей таблице есть ветка статуса, а правила этого метода уже определяют другие коды
+для конкретных отказов, сначала спроси, применима ли общая ветка к этому методу. Лишь при
+положительном ответе запрашивай отличающееся условие; сохрани установленные коды в тесте.
 """

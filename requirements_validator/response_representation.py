@@ -12,6 +12,7 @@ _RESPONSE = re.compile(r"ответ|клиент|получател|вызыва
 _STORAGE_DESTINATION = re.compile(r"\s+(?:в (?:базу|хранилище|память)|to (?:the )?(?:store|database))\b", re.I)
 _NONMANDATORY = re.compile(r"(?:не|можно|разрешено|допускается|может|may|optionally|must not|do not)\s+$", re.I)
 _PRIOR = re.compile(_OLD + r"|до (?:запроса|операции|вызова|отказа)|исходн\w* значени|"
+                    r"(?:свер\w*|сравн\w*|сопостав\w*)[^.;!?]{0,40}\bс исходными\b|"
                     r"заранее (?:сохран|задан)|предварительно (?:задан|сохран)", re.I)
 _SHAPE = re.compile(r"\b(?:как(?:ой|ое|ом|ого|ие|им|ими|их|ов[аоы]?)?|где)\b|"
                     r"\b(?:how|where|which|what)\b", re.I)

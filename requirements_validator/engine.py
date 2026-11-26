@@ -900,7 +900,7 @@ def _final_decisions(raw, candidates, claims, signals=(), verified_refs=(), capa
         prior = originals[ident]
         try:
             finding = _adjudicate_one(decision, prior, source_quotes)
-            if issue := input_scope_error(finding, prior, unbound_examples):
+            if issue := input_scope_error(finding, prior, unbound_examples, source_quotes):
                 raise DraftError(issue, ["/action", "/case_check", "/question_mode", "/question", "/test", "/question_check"])
             if issue := scope_error(finding, prior, source_quotes):
                 raise DraftError(issue, ["/action", "/question_mode", "/question", "/test", "/question_check"])

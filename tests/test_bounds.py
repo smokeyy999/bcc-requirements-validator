@@ -17,6 +17,53 @@ def source(*passages):
 
 
 class CapacityTests(unittest.TestCase):
+    def test_text_limits_match_full_unit_and_implicit_text_or_same_named_field(self):
+        limit = "Reject an item when its text exceeds 12 Unicode code points."
+        for accepted in ("An item of 13 Unicode code points is accepted.",
+                         "The editor accepts an item with text of 13 Unicode code points."):
+            with self.subTest(accepted=accepted):
+                _, _, (pair,) = source(limit, accepted)
+                self.assertEqual((pair["subject"], pair["length_field"], pair["unit"]), ("item", "text", "unicode code point"))
+                self.assertEqual((pair["limit"], pair["accepted"]), (12, 13))
+                self.assertTrue(unresolved_capacity(pair, [], {}))
+        _, _, (named,) = source("Reject a parcel if its title contains more than 9 characters.",
+                                "A parcel whose title has 10 characters is accepted.")
+        self.assertEqual(named["length_field"], "title")
+
+    def test_text_overflow_does_not_confuse_fields_units_or_the_entire_record(self):
+        limit = "Reject an item when its text exceeds 12 Unicode code points."
+        for accepted in ("An item of 13 Unicode code units is accepted.",
+                         "An item of 13 UTF-16 code units is accepted.",
+                         "An item of 13 bytes is accepted.",
+                         "An item with label of 13 Unicode code points is accepted.",
+                         "An envelope of 13 Unicode code points is accepted.",
+                         "An item of 12 Unicode code points is accepted.",
+                         "An item of 13 Unicode code points is not accepted.",
+                         "An item of 13 Unicode code points is skipped; the next item is accepted.",
+                         "An item of 13 Unicode code points including the header is accepted."):
+            with self.subTest(accepted=accepted):
+                self.assertEqual(source(limit, accepted)[2], [])
+        bare = "An item of 13 Unicode code points is accepted."
+        for extra in ("The length of an item includes the header.",
+                      "Reject an item when its label exceeds 12 Unicode code points."):
+            self.assertEqual(source(limit, bare, extra)[2], [])
+        for prefix in ("Unless marked as imported, ", "Never ", "When closed, "):
+            self.assertEqual(source(prefix + limit, bare)[2], [])
+        self.assertEqual(source(limit, "If used for preview, an item of 13 Unicode code points is accepted.")[2], [])
+
+    def test_source_based_exception_applies_to_the_same_text_and_quantity(self):
+        limit = "Reject a label when its text exceeds 7 characters."
+        instance = "A label with text of 8 characters is accepted."
+        accepted = "On import truncate the label text to 7 characters."
+        waiver = "A label with text of 8 characters is exempt from the text length limit."
+        _, _, (pair,) = source(limit, instance, accepted,
+                               "Truncate the label title to 7 characters; keep its text.",
+                               "Never truncate the label text to 7 characters.",
+                               "Truncate the label text to 8 characters.", waiver,
+                               "A label with text of 9 characters is exempt from the text length limit.")
+        self.assertEqual(pair["qualification_ids"], ["R-B3-01", "R-B7-01"])
+        self.assertFalse(unresolved_capacity(pair, [], {"R-B2-01":dict(supports=["R-B3-01"])}))
+
     def test_raw_quotes_show_same_container_and_exceeded_count(self):
         blocks, claims, pairs = source(LIMIT, OVERSIZED)
         clone = dict(claims[0], id="R-B1-02")

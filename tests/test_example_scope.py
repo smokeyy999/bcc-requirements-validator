@@ -83,3 +83,29 @@ class ExampleInputTests(unittest.TestCase):
         original["evidence"].append(ok)
         original["proposal_options"][0] = dict(anchor=ok)
         self.assertEqual(input_scope_error(original, original, {"output": "202"}), "")
+
+    def test_a_message_illustration_does_not_require_an_exact_text_fixture(self):
+        candidate = dict(topic="Запрос для сообщения при 422",
+                         question="Какой запрос воспроизводит сообщение «Профиль отклонён» при 422?",
+                         test="Проверить HTTP 422 и точный текст сообщения.", counted=False,
+                         evidence=[dict(id="R-X", block="rule", quote=self.rules),
+                                   dict(id="R-Y", block="output", quote='{"detail":"Профиль отклонён"}')])
+        scope = {"output": "422"}
+        self.assertIn("описательное сообщение", input_scope_error(candidate, candidate, scope))
+        self.assertEqual(input_scope_error(None, candidate, scope), "")
+        asks_whether = dict(candidate, question="Обязателен ли дословный текст, и если да, какой запрос его воспроизводит?")
+        self.assertEqual(input_scope_error(asks_whether, candidate, scope), "")
+        for requirement in ("В этом случае текст должен быть «Профиль отклонён».",
+                            "Текст сообщения в примере требуется воспроизводить дословно."):
+            self.assertEqual(input_scope_error(candidate, candidate, scope, {"R-Z": requirement}), "")
+        not_matched = dict(candidate, question="Какой запрос воспроизводит только статус?",
+                           test="Сверить статус и тип поля.", topic="Проверка типа поля.")
+        self.assertEqual(input_scope_error(not_matched, candidate, scope), "")
+        for payload in ('{"kind":"REJECTED"}', '{"result":"ERROR","detail":"Профиль отклонён"}'):
+            original = dict(candidate, evidence=[candidate["evidence"][0], dict(id="R-Y", block="output", quote=payload)])
+            self.assertEqual(input_scope_error(original, original, scope), "")
+        conflict = dict(candidate, topic="422 или 202 для одного запроса",
+                        question="Какой запрос даёт 202 с указанным сообщением?")
+        self.assertEqual(input_scope_error(conflict, conflict, {"output": "202"}), "")
+        self.assertIn("конкретном запросе", input_scope_error(dict(conflict, test="Проверить только 202."),
+                                                             conflict, {"output": "202"}))

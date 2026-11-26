@@ -50,6 +50,10 @@ class ReturnedStateTests(unittest.TestCase):
         conflict = "При отклонении редакции не возвращать прежний профиль клиенту."
         self.assertEqual(issue(wide, rules=[RULE, conflict]), "")
 
+    def test_reference_to_the_original_values_at_the_comparison_step(self):
+        self.assertEqual(issue(test="Для клиента с сохранёнными настройками отклонить запись. "
+                               "Считать обе настройки из тела ответа и сверить их с исходными."), "")
+
     def test_an_explicit_field_only_resolves_its_own_name(self):
         fixed = "При отклонении редакции вернуть прежний профиль в поле `snapshot` и результат ERROR."
         field = "В каком поле ответа передаётся прежний профиль?"

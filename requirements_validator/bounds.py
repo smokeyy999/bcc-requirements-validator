@@ -27,6 +27,91 @@ _NEGATION = re.compile(r"(?:\bне|\bбез|\bnot|\bnever)\s*$", re.I)
 _ADJECTIVE = re.compile(r"(?:ого|его|ому|ему|ыми|ими|ую|юю|ая|яя|ое|ее|ий|ый|ой|ых|их)$", re.I)
 _TARGET = re.compile(r"\b(?:до|первых|первые|последние|не более|first|last|to|at most)\s+(\d+)\b", re.I)
 _GENERIC = {"каждый", "каждая", "каждую", "каждого", "любая", "любой", "любую", "такой", "такую"}
+_TEXT_UNITS = (r"(?:Unicode\s+)?code[ -]points?|(?:UTF[- ]?(?:8|16|32)\s+)?code[ -]units?|"
+               r"grapheme(?:\s+clusters?)?s?|bytes?|characters?|letters?")
+_TEXT_QUANTITY = rf"(?P<quantity>(?P<number>\d+)\s+(?P<unit>{_TEXT_UNITS}))\b"
+_TEXT_LIMIT = re.compile(
+    rf"\breject\s+(?:(?:a|an|the|each|any)\s+)?(?P<subject>\w+)\s+(?:when|if)\s+"
+    rf"(?:the\s+length\s+of\s+)?its\s+(?P<field>\w+)\s+(?:length\s+)?"
+    rf"(?:exceeds|is\s+(?:longer\s+than|over)|contains\s+more\s+than)\s+{_TEXT_QUANTITY}", re.I)
+_TEXT_INSTANCE = re.compile(
+    rf"\b(?P<subject>\w+)\s+(?:(?:of|with)\s+|(?:with|whose)\s+(?P<field>\w+)\s+"
+    rf"(?:of|containing|measuring|is|has)\s+){_TEXT_QUANTITY}", re.I)
+_OTHER_PART = re.compile(r"\b(?:metadata|headers?|footers?|prefix(?:es)?|suffix(?:es)?|timestamps?|"
+                         r"attributes?|fields?|annotations?|serialized|serialised|framing|overhead)\b", re.I)
+_COMPOSITION = re.compile(r"\b(?:length|count\w*|measur\w*|includ\w*|compris\w*|consists?|"
+                          r"combined|together|total|with)\b", re.I)
+_LENGTH_TRANSFORM = re.compile(r"\b(?:truncat\w*|shorten\w*|trim\w*|clip\w*)\b", re.I)
+_EXEMPT = re.compile(r"\b(?:is exempt from|does not apply to|is excluded from)\b", re.I)
+_QUALIFIED = re.compile(r"\b(?:except|unless|only|provided\s+that|otherwise|however|if|but|and|"
+                        r"when|for|including|combined|together)\b", re.I)
+_CONDITIONAL_PREFIX = re.compile(r"\b(?:if|when|unless|except|only|provided|after|before|may|might|never|"
+                                 r"not|without)\b", re.I)
+
+
+def _unit_name(unit):
+    return re.sub(r"[\s-]+", " ", unit.lower()).removesuffix("s")
+
+
+def _text_exception(text, pair):
+    subject, field = re.escape(pair["subject"]), re.escape(pair["length_field"])
+    if not all(re.search(rf"\b{word}\b", text, re.I) for word in (subject, field)):
+        return False
+    if _EXEMPT.search(text) and re.search(r"\blimit\b", text, re.I):
+        return any(m["subject"].lower() == pair["subject"] and int(m["number"]) == pair["accepted"]
+                   and _unit_name(m["unit"]) == pair["unit"] and (m["field"] or pair["length_field"]).lower() == pair["length_field"]
+                   for m in _TEXT_INSTANCE.finditer(text))
+    for change in _LENGTH_TRANSFORM.finditer(text):
+        prefix, suffix = text[:change.start()], text[change.end():]
+        operand = (re.match(rf"\s+(?:(?:the|its)\s+)?(?:{subject}(?:'s)?\s+)?{field}\b", suffix, re.I)
+                   or re.search(rf"\b{field}\s+(?:(?:must|shall)\s+be|is|gets)\s+$", prefix, re.I))
+        if not operand or _NEGATION.search(prefix):
+            continue
+        target = re.search(rf"\b(?:to|at most|first)\s+{_TEXT_QUANTITY}", suffix, re.I)
+        if target and _unit_name(target["unit"]) == pair["unit"] and int(target["number"]) <= pair["limit"]:
+            return True
+    return False
+
+
+def _text_pairs(blocks, rows, claims):
+    clauses = [(block.id, clause) for block in blocks for clause in _sentences(block.text)]
+    examples = [(block, clause, m) for block, clause in clauses
+                if _ADMITTED.search(clause) and not _REFUSED.search(clause)
+                for m in _TEXT_INSTANCE.finditer(clause)]
+    limits = [(block, m) for block, clause in clauses for m in _TEXT_LIMIT.finditer(clause)
+              if not _QUALIFIED.search(clause[m.end():]) and not _CONDITIONAL_PREFIX.search(clause[:m.start()])]
+    pairs = []
+    for block, limit in limits:
+        subject, field = limit["subject"].lower(), limit["field"].lower()
+        unit, upper = _unit_name(limit["unit"]), int(limit["number"])
+        entity = re.compile(rf"\b{re.escape(subject)}s?\b", re.I)
+        compound = any(entity.search(clause) and _OTHER_PART.search(clause) and _COMPOSITION.search(clause)
+                       for _, clause in clauses)
+        competing_fields = any(m["subject"].lower() == subject and m["field"].lower() != field
+                               and _unit_name(m["unit"]) == unit for _, m in limits)
+        for example_block, clause, example in examples:
+            if example["subject"].lower() != subject or _unit_name(example["unit"]) != unit:
+                continue
+            # «An item of N characters» can describe its text. It does not establish
+            # a member's length when the record size includes other components.
+            named = example["field"]
+            if (named and named.lower() != field) or (not named and (field != "text" or compound or competing_fields)):
+                continue
+            observed = int(example["number"])
+            tail = clause[example.end():]
+            passive = re.match(r"\s+(?:long\s+)?(?:(?:is|was|must be|shall be|will be)\s+)?(?:accepted|permitted|allowed)\b", tail, re.I)
+            active = re.search(r"\b(?:accepts|allows|permits)\s+(?:(?:a|an|the)\s+)?$", clause[:example.start()], re.I)
+            if (observed <= upper or not (passive or active) or _QUALIFIED.search(tail)
+                    or _CONDITIONAL_PREFIX.search(clause[:example.start()])):
+                continue
+            left, right = _claims_at(rows[block], limit["quantity"]), _claims_at(rows[example_block], example["quantity"])
+            if not left or not right or set(left).intersection(right):
+                continue
+            pair = dict(subject=subject, length_field=field, unit=unit, limit=upper, accepted=observed,
+                        intake_only=False, limit_ids=left, instance_ids=right)
+            pair["qualification_ids"] = [row["id"] for row in claims if _qualifies(row["quote"], pair)]
+            pairs.append(pair)
+    return pairs
 
 
 def _stem(word):
@@ -56,6 +141,8 @@ def _claims_at(rows, phrase):
 
 
 def _qualifies(text, pair):
+    if "length_field" in pair:
+        return any(_text_exception(clause, pair) for clause in _sentences(text))
     for clause in _sentences(text):
         terms = {_stem(word) for word in re.findall(_WORD, clause)}
         if not {pair["subject"], pair["unit"]} <= terms:
@@ -98,7 +185,7 @@ def capacity_pairs(blocks, claims):
                         limit_ids=left, instance_ids=right)
             pair["qualification_ids"] = [row["id"] for row in claims if _qualifies(row["quote"], pair)]
             pairs.append(pair)
-    return pairs
+    return pairs + _text_pairs(blocks, rows, claims)
 
 
 def linked(pair, finding):
@@ -135,7 +222,10 @@ def missing_capacity_basis(pair, findings, decisions, originals):
 
 
 def diagnosis(pair):
-    return (f"Сопоставь предел {pair['limit']} ({', '.join(pair['limit_ids'])}) "
+    scope = (f"Для {pair['subject']} сопоставляется длина {pair['length_field']} в {pair['unit']}. "
+             "Для другой меры или отдельного размера записи с заголовком нужна цитата из источника. "
+             if "length_field" in pair else "")
+    return (scope + f"Сопоставь предел {pair['limit']} ({', '.join(pair['limit_ids'])}) "
             f"и принятие {pair['accepted']} ({', '.join(pair['instance_ids'])}). "
             "При совпадающем объекте без прямо заданного фильтра или исключения это дефект "
             "противоречивости с основаниями из обоих правил. Для снятия или понижения нужны "
