@@ -1,0 +1,12 @@
+2026-11-27T00:43:36+05:00
+> python -m requirements_validator --input checks/lasteval/inputs/case-r/control.md --output checks/lasteval/runs/finish/case-r-base/report.md
+Документ «Печатная ведомость сценического реквизита» · исходных блоков 7 · SHA-256 0bbe59bfaff198380a6b3fe6c7a0df334a9ce1368fbf36bb0d60494f02ca7219
+Версия d16b7322433096e486a543366bdca2d14c15b908 · рабочая копия чистая
+Доступ подтверждён · OpenAI через Codex CLI · gpt-6.2-sol
+Выделение и оценка утверждений: пакет 1, блоков 7.
+Сквозная проверка всего документа: утверждений 16.
+Независимая проверка оснований и вопросов по всему источнику: замечаний 0.
+Отчёт сохранён в ./checks/lasteval/runs/finish/case-r-base/report.md
+Метрики сохранены в ./checks/lasteval/runs/finish/case-r-base/report/run-meta.json
+Готово за 87.9 с, включая запись · запросов модели 4 (повторных 0) · токены входа 63404, выхода 3457 · утверждений 16 · нарушений 0 · вопросов 0
+Exit 0, 88.0 s

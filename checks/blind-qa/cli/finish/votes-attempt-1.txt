@@ -1,0 +1,12 @@
+2026-11-27T00:44:27+05:00
+> python -m requirements_validator --input checks/blind-qa/inputs/votes/variant.md --output checks/blind-qa/runs/finish/votes/report.md
+Документ «Табло решения трёх арбитров» · исходных блоков 4 · SHA-256 23b1270acf33b75bf3aa4b9685b1c358654c351ab661058036ccac6e9a2b8656
+Версия d16b7322433096e486a543366bdca2d14c15b908 · рабочая копия чистая
+Доступ подтверждён · OpenAI через Codex CLI · gpt-6.2-sol
+Выделение и оценка утверждений: пакет 1, блоков 4.
+Сквозная проверка всего документа: утверждений 12.
+Независимая проверка оснований и вопросов по всему источнику: замечаний 2.
+Отчёт сохранён в ./checks/blind-qa/runs/finish/votes/report.md
+Метрики сохранены в ./checks/blind-qa/runs/finish/votes/report/run-meta.json
+Готово за 113.7 с, включая запись · запросов модели 4 (повторных 0) · токены входа 62935, выхода 4837 · утверждений 12 · нарушений 2 · вопросов 2
+Exit 0, 113.8 s

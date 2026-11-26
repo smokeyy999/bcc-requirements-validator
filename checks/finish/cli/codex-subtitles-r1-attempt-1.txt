@@ -1,0 +1,15 @@
+2026-11-27T00:43:03+05:00
+> python -m requirements_validator --input benchmark/subtitles/requirements.md --output reports/finish/benchmark-runs/subtitles/r1/report.md
+Документ «Subtitle track export» · исходных блоков 9 · SHA-256 ea6fe612b993d5cfa1a728821cf9c5c347f32e62ded42da27f1707a2df19f777
+Версия d16b7322433096e486a543366bdca2d14c15b908 · рабочая копия чистая
+Доступ подтверждён · OpenAI через Codex CLI · gpt-6.2-sol
+Выделение и оценка утверждений: пакет 1, блоков 9.
+Сквозная проверка всего документа: утверждений 13.
+Проверка черновика: /traces/4: семантика операции уже проверено для R-M0003-02, R-M0014-01, R-M0010-02; удали повтор
+/traces/8: источник значения уже проверено для R-M0008-01; удали повтор. Запрошена одна точечная правка.
+Независимая проверка оснований и вопросов по всему источнику: замечаний 7.
+Проверка черновика: /decisions/6/question_mode, /decisions/6/question, /decisions/6/test, /decisions/6/action (Z-007): В карточке требуется открытый вопрос. Верни question_mode=сохранить, если исходные вопрос и тест верны, либо выбери заменить и заполни question и test. Если текст уже даёт ответ и замечание не обосновано, выбери action=снять и question_mode=убрать. Запрошена одна точечная правка.
+Отчёт сохранён в ./reports/finish/benchmark-runs/subtitles/r1/report.md
+Метрики сохранены в ./reports/finish/benchmark-runs/subtitles/r1/report/run-meta.json
+Готово за 219.0 с, включая запись · запросов модели 6 (повторных 2) · токены входа 106301, выхода 9687 · утверждений 13 · нарушений 4 · вопросов 6
+Exit 0, 219.1 s

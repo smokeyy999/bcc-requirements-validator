@@ -1,0 +1,12 @@
+2026-11-27T00:47:27+05:00
+> python -m requirements_validator --input benchmark/subtitles/baseline.md --output reports/finish/benchmark-runs/subtitles-base/r2/report.md
+Документ «Subtitle track export» · исходных блоков 9 · SHA-256 b220384c1ba6223d9e3492b135bc7279740d6a62e33f237fc132aeb4610be25b
+Версия d16b7322433096e486a543366bdca2d14c15b908 · рабочая копия чистая
+Доступ подтверждён · OpenAI через Codex CLI · gpt-6.2-sol
+Выделение и оценка утверждений: пакет 1, блоков 9.
+Сквозная проверка всего документа: утверждений 13.
+Независимая проверка оснований и вопросов по всему источнику: замечаний 3.
+Отчёт сохранён в ./reports/finish/benchmark-runs/subtitles-base/r2/report.md
+Метрики сохранены в ./reports/finish/benchmark-runs/subtitles-base/r2/report/run-meta.json
+Готово за 168.3 с, включая запись · запросов модели 4 (повторных 0) · токены входа 63901, выхода 7549 · утверждений 13 · нарушений 0 · вопросов 3
+Exit 0, 168.5 s

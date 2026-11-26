@@ -1,0 +1,14 @@
+# Повторы с разными секундами старта
+
+Паспорт записывает время начала с точностью до секунды. Штатный оценщик требует три разных времени начала для каждого документа. Из отдельных процессов первой партии шесть начали работу в ту же секунду, что более ранний по номеру проход. Валидатор таблицы остановил расчёт. [Правило в оценщике](../../scripts/evaluate.py)
+
+В порядке номеров проходов сохранён первый результат для каждой секунды. Для каждого следующего совпадения сделан новый независимый вызов той же версии на том же исходнике. Решение о повторе определяется только временем начала. В архиве сохранены байты каждого из шести первоначальных отчётов, включая паспорт и хеш. В итоговом расчёте на документ приходится три результата. [Все попытки](attempts.md)
+
+| Документ | Проход | Та же секунда, что в проходе | Первоначальный отчёт и паспорт | Новый отчёт и паспорт |
+|---|---:|---:|---|---|
+| dispatch | 2 | 1 | [Отчёт](../../reports/finish2/same-second/dispatch/r2/report.md) · [Паспорт](../../reports/finish2/same-second/dispatch/r2/report/run-meta.json) | [Отчёт](../../reports/finish2/benchmark-runs/dispatch/r2/report.md) · [Паспорт](../../reports/finish2/benchmark-runs/dispatch/r2/report/run-meta.json) |
+| dispatch-base | 2 | 1 | [Отчёт](../../reports/finish2/same-second/dispatch-base/r2/report.md) · [Паспорт](../../reports/finish2/same-second/dispatch-base/r2/report/run-meta.json) | [Отчёт](../../reports/finish2/benchmark-runs/dispatch-base/r2/report.md) · [Паспорт](../../reports/finish2/benchmark-runs/dispatch-base/r2/report/run-meta.json) |
+| irrigation | 2 | 1 | [Отчёт](../../reports/finish2/same-second/irrigation/r2/report.md) · [Паспорт](../../reports/finish2/same-second/irrigation/r2/report/run-meta.json) | [Отчёт](../../reports/finish2/benchmark-runs/irrigation/r2/report.md) · [Паспорт](../../reports/finish2/benchmark-runs/irrigation/r2/report/run-meta.json) |
+| irrigation-base | 2 | 1 | [Отчёт](../../reports/finish2/same-second/irrigation-base/r2/report.md) · [Паспорт](../../reports/finish2/same-second/irrigation-base/r2/report/run-meta.json) | [Отчёт](../../reports/finish2/benchmark-runs/irrigation-base/r2/report.md) · [Паспорт](../../reports/finish2/benchmark-runs/irrigation-base/r2/report/run-meta.json) |
+| subtitles | 2 | 1 | [Отчёт](../../reports/finish2/same-second/subtitles/r2/report.md) · [Паспорт](../../reports/finish2/same-second/subtitles/r2/report/run-meta.json) | [Отчёт](../../reports/finish2/benchmark-runs/subtitles/r2/report.md) · [Паспорт](../../reports/finish2/benchmark-runs/subtitles/r2/report/run-meta.json) |
+| subtitles-base | 3 | 2 | [Отчёт](../../reports/finish2/same-second/subtitles-base/r3/report.md) · [Паспорт](../../reports/finish2/same-second/subtitles-base/r3/report/run-meta.json) | [Отчёт](../../reports/finish2/benchmark-runs/subtitles-base/r3/report.md) · [Паспорт](../../reports/finish2/benchmark-runs/subtitles-base/r3/report/run-meta.json) |
