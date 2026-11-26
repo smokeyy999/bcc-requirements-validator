@@ -100,9 +100,10 @@ def compact(value):
 
 
 class DraftError(ValueError):
-    def __init__(self, message, paths):
+    def __init__(self, message, paths, evidence_ids=None):
         super().__init__(message)
-        self.paths = paths
+        self.paths = list(dict.fromkeys(paths))
+        self.evidence_ids = evidence_ids or {}
 
 
 def _index(segment, size):
@@ -111,7 +112,7 @@ def _index(segment, size):
     return int(segment)
 
 
-def _apply_patch(original, schema, change_set, allowed):
+def _apply_patch(original, schema, change_set, allowed, evidence_ids=None):
     validate(change_set, PATCH)
     if not change_set["changes"]:
         raise ValueError("Пустая правка не исправляет отклонённый черновик")
@@ -155,6 +156,8 @@ def _apply_patch(original, schema, change_set, allowed):
             continue
         value = edit["value"] if target["type"] == "string" else json.loads(edit["value"])
         validate(value, target, path)
+        if evidence_ids and path in evidence_ids and value["id"] not in evidence_ids[path]:
+            raise ValueError(f"{path}: разрешены только указанные в диагностике ID оснований")
         if op == "append":
             node.append(value)
         else:
@@ -181,6 +184,7 @@ def _request(provider, instruction, payload, schema, parse, progress):
         except ValueError as error:
             summary = str(error)
             allowed = getattr(error, "paths", [])
+            evidence_ids = getattr(error, "evidence_ids", {})
         progress(f"Проверка черновика: {summary[:500]}. Запрошена одна точечная правка.")
         fix_prompt = (
             "Исправь только перечисленные ошибки существующего JSON-черновика. "
@@ -199,7 +203,7 @@ def _request(provider, instruction, payload, schema, parse, progress):
         with purpose("validation_patch"):
             changes = provider.ask(fix_prompt, PATCH)
         try:
-            repaired = _apply_patch(draft, schema, changes, allowed)
+            repaired = _apply_patch(draft, schema, changes, allowed, evidence_ids)
         except ValueError as error:
             raise ValueError(f"Повторный ответ модели не прошёл проверку: {summary}. "
                              f"Правка отклонена: {error}. Повторите прогон.") from error
@@ -455,23 +459,62 @@ def _trace_scope(claims, blocks):
 def _check_traces(raw, by_id, required, findings):
     _nonempty(raw["scope"], "operations", "values")
     topics = {}
-    for finding in findings:
-        topics.setdefault(finding["topic"], []).append(set(finding["ids"]))
-    seen, errors, paths = set(), [], []
+    for index, finding in findings.items():
+        topics.setdefault(finding["topic"], []).append((index, set(finding["ids"])))
+    seen, declared, errors, paths, evidence_ids = set(), set(), [], [], {}
     for i, trace in enumerate(raw["traces"]):
         subjects, supports = set(trace["subjects"]), set(trace["supports"])
         keys = {(trace["aspect"], ident) for ident in subjects}
+        declared.update(keys)
+        base = f"/traces/{i}"
+        before = len(errors)
+        if not subjects:
+            errors.append(f"{base}/subjects: нет проверяемого ID; добавь ID утверждения из claims")
+            paths.append(base + "/subjects/-")
+        for field in ("subjects", "supports"):
+            for j, ident in enumerate(trace[field]):
+                if ident not in by_id:
+                    path = f"{base}/{field}/{j}"
+                    errors.append(f"{path}: неизвестный ID {ident}; замени известным ID либо убери его")
+                    paths.append(path)
+        if not trace["reasoning"].strip():
+            errors.append(f"{base}/reasoning: отсутствует обоснование связи")
+            paths.append(base + "/reasoning")
+        duplicates = [j for j, ident in enumerate(trace["subjects"]) if (trace["aspect"], ident) in seen]
+        if duplicates:
+            ids = [trace["subjects"][j] for j in duplicates]
+            errors.append(f"{base}: {trace['aspect']} уже проверено для {', '.join(ids)}; удали повтор")
+            if len(duplicates) == len(trace["subjects"]):
+                paths.append(base)
+            else:
+                paths.extend(f"{base}/subjects/{j}" for j in duplicates)
         topic = trace["finding_topic"]
-        if (not subjects or not trace["reasoning"].strip() or not (subjects | supports) <= by_id.keys()
-                or keys & seen or (topic and not any(subjects <= ids for ids in topics.get(topic, [])))
-                or (not topic and not supports)):
-            errors.append(f"/traces/{i}: проверь ID, обоснование, повтор трассы и связь с topic/evidence")
-            paths.extend([f"/traces/{i}", "/findings/-"])
-        else:
+        matching = topics.get(topic, [])
+        if not topic and not supports:
+            errors.append(f"{base}: для закрытой трассы нужны supports; для открытой укажи точный finding_topic")
+            paths.extend([base + "/supports/-", base + "/finding_topic", "/findings/-"])
+        if topic and not matching:
+            errors.append(f"{base}/finding_topic: неизвестная тема «{topic}». Темы проверенных карточек: "
+                          + ", ".join(topics))
+            paths.extend([base + "/finding_topic", base + "/supports/-", "/findings/-"])
+        if matching and subjects and subjects <= by_id.keys() and not any(subjects <= ids for _, ids in matching):
+            errors.append(f"{base}: ни одна карточка «{topic}» не приводит все основания "
+                          f"{', '.join(sorted(subjects))}. Сверь сценарий и исходный текст.")
+            for index, ids in matching:
+                missing_ids = subjects - ids
+                path = f"/findings/{index}/evidence/-"
+                errors.append(f"{path}: если это тот же сценарий, добавь только подтверждённые исходником "
+                              f"основания из {', '.join(sorted(missing_ids))}, каждое с id и quote")
+                paths.append(path)
+                evidence_ids.setdefault(path, set()).update(missing_ids)
+            errors.append(f"{base}: если это иная связь, исправь ошибочную трассу; для закрытой нужны supports")
+            paths.extend([base, "/traces/-"])
+        if len(errors) == before:
             seen.update(keys)
     for aspect, field in ((OPERATION, "operations"), (VALUE, "values")):
         ids = required[aspect]
-        missing = [ident for ident in ids if (aspect, ident) not in seen]
+        # A malformed existing trace already has a scoped repair above.
+        missing = [ident for ident in ids if (aspect, ident) not in declared]
         if missing:
             errors.append(f"Нет трассы «{aspect}» для: {', '.join(missing)}")
             paths.extend(["/traces/-", "/findings/-"])
@@ -480,7 +523,7 @@ def _check_traces(raw, by_id, required, findings):
             if not note_refs or not note_refs <= by_id.keys():
                 errors.append(f"/scope/{field}: объясни неприменимость по существующему ID либо дай трассу")
                 paths.extend([f"/scope/{field}", "/traces/-", "/findings/-"])
-    return errors, paths
+    return errors, paths, evidence_ids
 
 
 def _set_result(raw, claims, blocks, required, references):
@@ -488,17 +531,17 @@ def _set_result(raw, claims, blocks, required, references):
     if any(not step.strip() for step in raw["priorities"]):
         raise ValueError("Пустой шаг в порядке исправлений")
     by_id = {c["id"]: c for c in claims}
-    checked, errors, paths = [], [], []
+    checked, errors, paths = {}, [], []
     for i, finding in enumerate(raw["findings"]):
         try:
-            checked.append(_finding(finding, by_id, blocks, references))
+            checked[i] = _finding(finding, by_id, blocks, references)
         except ValueError as error:
             errors.append(f"/findings/{i}: {error}")
             paths.append(f"/findings/{i}")
-    trace_errors, trace_paths = _check_traces(raw, by_id, required, checked)
+    trace_errors, trace_paths, evidence_ids = _check_traces(raw, by_id, required, checked)
     errors.extend(trace_errors)
     paths.extend(trace_paths)
-    findings = _merge(checked)
+    findings = _merge(checked.values())
     if findings and not raw["priorities"]:
         raise ValueError("Для замечаний нужен порядок исправлений")
     linked = {ident for f in findings for ident in f["ids"]}
@@ -515,9 +558,11 @@ def _set_result(raw, claims, blocks, required, references):
         errors.append("Нет результата сквозной проверки кандидатов " + ", ".join(sorted(pending)))
         paths.extend(["/resolved/-", "/findings/-"])
         for i in range(len(raw["findings"])):
-            paths.append(f"/findings/{i}/evidence/-")
+            path = f"/findings/{i}/evidence/-"
+            paths.append(path)
+            evidence_ids.setdefault(path, set()).update(pending)
     if errors:
-        raise DraftError("\n".join(errors), paths)
+        raise DraftError("\n".join(errors), paths, evidence_ids)
     # В свободном тексте тоже нельзя ссылаться на вымышленные ID данного протокола.
     prose = [raw["assessment"], raw["readiness"], *raw["priorities"], *resolved.values()]
     for f in findings:
