@@ -8,6 +8,7 @@ from copy import deepcopy
 
 from .bounds import (capacity_pairs, diagnosis as capacity_diagnosis, linked as capacity_linked,
                      missing_capacity_basis, unresolved_capacity)
+from .condition_evidence import direct_condition_evidence
 from .example_scope import EXAMPLE_SCOPE_INSTRUCTION, input_scope_error, unbound_response_examples
 from .metrics import purpose, stage
 from .prompts import ADJUDICATE, CAPACITY_INSTRUCTION, EXTRACT, SYNTHESIZE
@@ -955,6 +956,7 @@ def _final_decisions(raw, candidates, claims, signals=(), verified_refs=(), capa
         # Изменённые вердикты могут изменить итог и порядок исправлений.
         paths.extend(["/assessment", "/readiness", "/priorities"])
         raise DraftError("\n".join(errors), paths)
+    kept = [direct_condition_evidence(f, source_quotes) for f in kept]
     kept.sort(key=lambda f: (SEVERITIES.index(f["severity"]), not f["counted"], f["id"]))
     surviving = {f["id"] for f in kept}
     priorities = []
