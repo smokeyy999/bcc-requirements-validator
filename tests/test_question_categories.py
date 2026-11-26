@@ -72,6 +72,28 @@ class QuestionCategoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "question_mode.*сохранить.*заменить.*question.*test"):
             self.reviewed(question_mode="убрать", question_check=[])
 
+    def test_kept_defect_is_categorized_by_the_information_needed_to_close_it(self):
+        self.rule["quote"] = "После отбоя сирена воспроизводит описанный далее заключительный тон."
+        self.item.update(category="Трассируемость", question="Какой заключительный тон воспроизвести?",
+                         test="Завершить тревогу и сравнить прозвучавший тон с требуемым.")
+        self.check.update(state="не задан результат действия", known_answer=self.rule["quote"],
+                          decision=self.item["question"], outcomes=["Звучит нота ля.", "Звучит нота до."])
+        reviewed = self.reviewed()
+        self.assertEqual((reviewed["kind"], reviewed["category"], reviewed["counted"]),
+                         ("Дефект", "Полнота", True))
+        for checks in ([], [dict(self.check, state="открытый выбор")]):
+            with self.subTest(checks=checks), self.assertRaisesRegex(ValueError, "источником"):
+                self.reviewed(question_check=checks)
+
+    def test_reference_to_named_specification_can_remain_a_traceability_question(self):
+        self.rule["quote"] = "После отбоя сирена играет ля. Сверять звук с паспортом П-17."
+        self.item.update(category="Полнота", question="Где найти действующую версию паспорта П-17?")
+        self.check.update(state="не установлена связь с источником", known_answer=self.rule["quote"],
+                          decision=self.item["question"],
+                          outcomes=["Испытатель сверяет звук с паспортом изделия.",
+                                    "Испытатель сверяет звук с конструкторским паспортом серии."])
+        self.assertEqual(self.reviewed()["category"], "Трассируемость")
+
     def test_downgrade_distinguishes_a_missing_definition_from_an_unspecified_action_result(self):
         examples = [
             ("В зал передают премьерные куклы.", "Как мастер распознаёт премьерную куклу?",
@@ -171,7 +193,10 @@ class QuestionCategoryTests(unittest.TestCase):
                                 reason=quote, test="Зафиксировать ответ в сценарии испытания.",
                                 question_check=checked_question("R-X-01", quote, question,
                                     "Результат укладывается в выбранный критерий.",
-                                    "Для этого же наблюдения критерий не выполнен."),
+                                    "Для этого же наблюдения критерий не выполнен.",
+                                    state={"Трассируемость": "не установлена связь с источником",
+                                           "Проверяемость": "нет меры заявленного свойства",
+                                           "Ясность": "не определено значение термина"}[category]),
                                 supports=["R-X-01"], case_check={"status": "не применимо", "anchors": [],
                                                                 "condition": "", "effect": ""})
                 reviewed = _adjudicate_one(decision, item)

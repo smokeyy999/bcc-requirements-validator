@@ -8,6 +8,9 @@ from copy import deepcopy
 
 from .metrics import purpose, stage
 from .prompts import ADJUDICATE, EXTRACT, SYNTHESIZE
+from .question_scope import (
+    SCOPE_INSTRUCTION, candidate_scopes, identifier_limits, scope_error, source_boundaries, unreviewed_boundaries,
+)
 from .references import (REFERENCE_INSTRUCTION, has_independent_basis, missing_references,
                          reference_findings, repeats_reference)
 from .signals import SIGNAL_INSTRUCTION, grouped_in, has_support, source_signals
@@ -71,6 +74,7 @@ GLOBAL = obj(findings=array(FINDING), resolved=array(obj(id=STR, reason=STR, sup
 CASE_CHECK = obj(status=enum("подтверждено", "разные условия", "требует ответа", "не применимо"),
                  condition=STR, anchors=array(obj(id=STR, quote=STR)), effect=STR)
 QUESTION_CHECK = obj(state=enum("открытый выбор", "не определено значение термина", "не задан результат действия",
+                                "не установлена связь с источником",
                                 "неполный приёмочный сценарий",
                                 "нет меры заявленного свойства", "ответ дан", "необязательная деталь",
                                 "зависит от другого решения"),
@@ -575,7 +579,7 @@ def _check_traces(raw, by_id, required, findings):
     return errors, paths, evidence_ids
 
 
-def _set_result(raw, claims, blocks, required, references, signals=(), verified_refs=()):
+def _set_result(raw, claims, blocks, required, references, signals=(), verified_refs=(), boundaries=None):
     _nonempty(raw, "assessment", "readiness")
     if any(not step.strip() for step in raw["priorities"]):
         raise ValueError("Пустой шаг в порядке исправлений")
@@ -608,6 +612,9 @@ def _set_result(raw, claims, blocks, required, references, signals=(), verified_
             paths.append(f"/resolved/{i}")
             continue
         resolved[ident] = {"reason": row["reason"], "supports": list(dict.fromkeys(supports))}
+    if boundary_errors := unreviewed_boundaries(boundaries or {}, claims, findings, resolved):
+        errors.extend(boundary_errors)
+        paths.extend(["/resolved/-", "/findings/-"])
     for signal in signals:
         ids = set(signal["claims"])
         if not ids or grouped_in(signal, findings):
@@ -701,12 +708,14 @@ def _check_question(d, f, source_quotes):
     checks = d["question_check"]
     ambiguous = f["kind"] == "Неоднозначность"
     needs_check = ambiguous or f["kind"] == "Предполагаемый пробел" or (
-        f["kind"] == "Дефект" and f["category"] in {"Полнота", "Проверяемость"} and bool(f["question"]))
+        f["kind"] == "Дефект" and f["category"] in {"Полнота", "Проверяемость", "Трассируемость"}
+        and bool(f["question"]))
     if not checks and not needs_check:
         return
     path = ["/question_check"]
     if len(checks) != 1 or not f["question"]:
-        raise DraftError("Для открытого пробела, неоднозначности или вопроса о неполной приёмке нужна одна проверка вопроса", path)
+        raise DraftError("Для открытого пробела, неоднозначности или вопроса о результате, мере или связи "
+                         "с источником нужна одна проверка вопроса", path)
     check = checks[0]
     state = check["state"]
     if state in {"ответ дан", "необязательная деталь", "зависит от другого решения"}:
@@ -743,6 +752,12 @@ def _check_question(d, f, source_quotes):
             f["category"] = "Ясность"
         elif state == "нет меры заявленного свойства":
             f["category"] = "Проверяемость"
+        elif state == "не установлена связь с источником":
+            f["category"] = "Трассируемость"
+        elif f["category"] == "Трассируемость":
+            raise DraftError("Уточни предмет вопроса: выбор ожидаемого значения или конечного состояния — "
+                             "«не задан результат действия»; поиск адресата ссылки или пути уже определённых "
+                             "данных — «не установлена связь с источником».", path)
     f["question_basis"] = dict(check, checked_ids=list(dict.fromkeys(check["checked_ids"])))
 
 
@@ -828,6 +843,8 @@ def _final_decisions(raw, candidates, claims, signals=(), verified_refs=()):
         prior = originals[ident]
         try:
             finding = _adjudicate_one(decision, prior, source_quotes)
+            if issue := scope_error(finding, prior, source_quotes):
+                raise DraftError(issue, ["/action", "/question_mode", "/question", "/test", "/question_check"])
             if finding and not has_independent_basis(finding, verified_refs, source_quotes):
                 raise DraftError('Отдельный вопрос, связанный с оборванной ссылкой, требует положительного '
                                  'основания. В decision приведи в «ёлочках» дословную выдержку из obligation_id '
@@ -984,12 +1001,18 @@ def review(document, provider, progress=lambda msg: None):
     if signals:
         payload["source_signals"] = signals
     instructions = ("\n" + SIGNAL_INSTRUCTION if signals else "")
+    boundaries = source_boundaries(document.blocks)
+    if boundaries:
+        payload["source_boundaries"] = boundaries
+    check_scope = bool(boundaries) or identifier_limits(document.blocks)
+    if check_scope:
+        instructions += "\n" + SCOPE_INSTRUCTION
     if verified_refs:
         instructions += "\n" + REFERENCE_INSTRUCTION
         payload["verified_references"] = [{"target": f["missing_target"], "evidence": f["evidence"]} for f in verified_refs]
     candidates, resolved, trace_review = _request(
         provider, SYNTHESIZE + instructions, payload, GLOBAL,
-        lambda data: _set_result(data, claims, blocks, required, references, signals, verified_refs), progress)
+        lambda data: _set_result(data, claims, blocks, required, references, signals, verified_refs, boundaries), progress)
     stage("adjudication")
     progress(f"Независимая проверка оснований и вопросов по всему источнику: замечаний {len(candidates)}.")
     fixed = [f for f in candidates if f.get("missing_target")]
@@ -997,6 +1020,12 @@ def review(document, provider, progress=lambda msg: None):
     audit_payload = {"blocks": payload["blocks"], "candidates": [_audit_candidate(f) for f in candidates],
                      "trace_review": trace_review,
                      "claims": [{k: c[k] for k in ("id", "block", "quote")} for c in claims]}
+    if boundaries:
+        audit_payload["source_boundaries"] = boundaries
+    if scopes := candidate_scopes(candidates):
+        audit_payload["question_scopes"] = scopes
+        if not check_scope:
+            instructions += "\n" + SCOPE_INSTRUCTION
     if signals:
         audit_payload["source_signals"] = signals
     if fixed:

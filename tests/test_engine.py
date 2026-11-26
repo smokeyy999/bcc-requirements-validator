@@ -267,8 +267,9 @@ class TestReview(unittest.TestCase):
         trace["finding_topic"] = self.issue["topic"]
         audit = agreed_audit()
         audit["decisions"][0]["question_check"] = checked_question(
-            "R-M01-01", "Обещан счётчик гостей.", "Когда учитывается вошедший?",
-            "Показание меняется при входе.", "Показание меняется после регистрации.")
+            "R-M01-01", "Обещан счётчик гостей.", "Откуда терминал получает число гостей?",
+            "На экране значение от контроллера проходной.", "На экране значение от стойки регистрации.",
+            state="не установлена связь с источником")
         audit["decisions"][0]["case_check"] = {"status": "не применимо", "condition": "", "effect": "", "anchors": []}
         result = review(self.document, Responses(self.local, self.whole, audits=[audit]))
         self.assertEqual(result["counts"]["gaps"], 1)
