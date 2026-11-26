@@ -78,6 +78,15 @@ class AcceptanceScopeTests(unittest.TestCase):
         self.assertEqual(candidate_scopes([dict(id="Z-001", question="Какой срок доставки адресату?")]),
                          {"Z-001": "граница измерения срока"})
 
+    def test_marker_for_a_different_condition_does_not_turn_into_a_delivery_flag(self):
+        sources = ["Пульт передаёт оператору команду в течение минуты.",
+                   "Флаг ручной блокировки запрещает передавать автоматические команды."]
+        question = "Как ведёт себя флаг ручной блокировки, если панель передаёт команду?"
+        test = "Установить блокировку и направить команду на панель. Проверить состояние двигателя."
+        self.assertEqual(self.decide(sources, question, test)["test"], test)
+        blocks = [SimpleNamespace(id=str(i), text=s, section="Пульт") for i, s in enumerate(sources)]
+        self.assertEqual(source_boundaries(blocks), {})
+
     def test_another_field_does_not_supply_the_alphabet(self):
         q = "Предел длины parcelId применяется в байтах или символах?"
         test = "Передать граничный номер с многобайтовыми символами."

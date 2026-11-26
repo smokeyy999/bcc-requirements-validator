@@ -10,7 +10,10 @@ _ID = re.compile(r"(?<![\w-])" + _NAME + r"(?![\w-]|\.[\w])")
 _USE = re.compile(
     r"\b(?:по\s+(?:правилу|пункту|требованию)|согласно\s+(?:правилу|пункту|требованию)|"
     r"см\.\s*(?:правило|пункт|требование)?|(?:see|under|per|according to)\s+"
-    r"(?:the\s+)?(?:rule|section|requirement|clause))\s*[«\[`*]*"
+    r"(?:the\s+)?(?:rule|section|requirement|clause)|see\b|"
+    r"(?:listed|defined|specified|described|documented|given)\s+in(?:\s+(?:rule|section|requirement|clause))?|"
+    r"(?:указан|определ[её]н|описан|привед[её]н)\w*\s+в(?:\s+(?:пункте|правиле|требовании))?)"
+    r"\s*[«\[`*]*"
     r"(?P<name>" + _NAME + r")(?![\w-]|\.[\w])", re.I)
 _EXTERNAL = re.compile(r"\b(?:внешн\w*|стандарт\w*|регламент\w*|договор\w*|приложени\w*|"
                        r"(?:из|в|согласно)\s+(?:спецификаци\w*|ТЗ)\s+(?:клиента|партн[её]ра|заказчика|подрядчика)|"
@@ -52,7 +55,7 @@ def missing_references(blocks):
                 if _ID.fullmatch(token):
                     possible.add(_key(token))
     existing = {name.casefold() for name in declared | possible}
-    families = {_family(name) for name in declared}
+    families = {_family(name).casefold() for name in declared}
     found = {}
     for block in blocks:
         if not families or getattr(block, 'kind', None) == 'code':
@@ -64,11 +67,11 @@ def missing_references(blocks):
             for ref in _USE.finditer(clause):
                 name = ref['name']
                 key = _key(name)
-                if key.casefold() in existing or _family(key) not in families:
+                if key.casefold() in existing or _family(key).casefold() not in families:
                     continue
                 if any(m.start() <= ref.start('name') < m.end() and _key(m[1] or '') != '#' + key for m in links):
                     continue
-                found.setdefault((key, block.id), dict(block=block.id, target=name, citation=ref[0]))
+                found.setdefault((key.casefold(), block.id), dict(block=block.id, target=name, citation=ref[0]))
     return list(found.values())
 
 
@@ -95,7 +98,7 @@ def reference_findings(references, claims, blocks, context):
             context[:] = [row for row in context if not isinstance(row, dict) or row.get('block') != block.id]
         ident = claim['id']
         evidence = dict(id=ident, block=block.id, quote=quote, section=block.section, location=block.location)
-        key = _key(name)
+        key = _key(name).casefold()
         if key in by_target:
             prior = by_target[key]
             if ident not in prior['ids']:
@@ -120,8 +123,8 @@ def repeats_reference(finding, verified):
     editorial = _EDITORIAL_QUESTION.fullmatch(question) if question else None
     if question and not editorial or not question and finding['category'] != 'Трассируемость':
         return False
-    named = {_key(editorial['name'])} if editorial else {_key(m[0]) for m in _ID.finditer(finding['topic'])}
-    return any(_key(ref['missing_target']) in named and set(ref['ids']).intersection(finding['ids']) for ref in verified)
+    named = {_key(editorial['name']).casefold()} if editorial else {_key(m[0]).casefold() for m in _ID.finditer(finding['topic'])}
+    return any(_key(ref['missing_target']).casefold() in named and set(ref['ids']).intersection(finding['ids']) for ref in verified)
 
 
 def has_independent_basis(finding, verified, quotes):

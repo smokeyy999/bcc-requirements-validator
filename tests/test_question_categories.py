@@ -94,6 +94,38 @@ class QuestionCategoryTests(unittest.TestCase):
                                     "Испытатель сверяет звук с конструкторским паспортом серии."])
         self.assertEqual(self.reviewed()["category"], "Трассируемость")
 
+    def test_membership_in_an_input_class_and_target_of_the_action_stay_distinct(self):
+        self.rule["quote"] = "При поступлении выцветшей копии мастер обязан присвоить ей указанную архивную метку."
+        self.item.update(kind="Предполагаемый пробел", category="Полнота", counted=False)
+        self.check.update(state="не задан результат действия", known_answer=self.rule["quote"])
+        examples = [
+            ("По какому признаку считать поступившую копию выцветшей?", "Ясность",
+             "не определено значение термина", ["Для копии нужна маркировка.", "Эта копия не требует маркировки."]),
+            ("Какую метку присвоить заведомо выцветшей копии?", "Полнота",
+             "не задан результат действия", ["Стоит метка A.", "Стоит метка B."]),
+            ("Какую метку считать архивной?", "Полнота",
+             "не задан результат действия", ["Архивной выбрана метка A.", "Архивной выбрана метка B."]),
+        ]
+        for question, category, state, outcomes in examples:
+            with self.subTest(question=question):
+                self.item["question"] = question
+                self.check.update(decision=question, outcomes=outcomes)
+                reviewed = self.reviewed()
+                self.assertEqual((reviewed["category"], reviewed["question_basis"]["state"]), (category, state))
+                self.assertFalse(reviewed["counted"])
+        self.item["question"] = "По какому признаку считать копию выцветшей и какую метку ей присвоить?"
+        self.check["decision"] = self.item["question"]
+        with self.assertRaisesRegex(ValueError, "один вопрос"):
+            self.reviewed()
+
+    def test_measure_of_a_promised_time_remains_verifiability(self):
+        self.rule["quote"] = "Если проверка быстрая, команда получает премию. Срок проверки отсчитывают с приёма файла."
+        self.item.update(kind="Предполагаемый пробел", counted=False, question="Какую проверку считать быстрой?")
+        self.check.update(state="нет меры заявленного свойства", known_answer=self.rule["quote"],
+                          decision=self.item["question"], outcomes=["Проверка уложилась в срок.",
+                                                                   "Та же проверка превысила срок."])
+        self.assertEqual(self.reviewed()["category"], "Проверяемость")
+
     def test_downgrade_distinguishes_a_missing_definition_from_an_unspecified_action_result(self):
         examples = [
             ("В зал передают премьерные куклы.", "Как мастер распознаёт премьерную куклу?",

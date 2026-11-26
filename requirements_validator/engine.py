@@ -6,8 +6,11 @@ from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from copy import deepcopy
 
+from .bounds import (capacity_pairs, diagnosis as capacity_diagnosis, linked as capacity_linked,
+                     missing_capacity_basis, unresolved_capacity)
+from .example_scope import EXAMPLE_SCOPE_INSTRUCTION, input_scope_error, unbound_response_examples
 from .metrics import purpose, stage
-from .prompts import ADJUDICATE, EXTRACT, SYNTHESIZE
+from .prompts import ADJUDICATE, CAPACITY_INSTRUCTION, EXTRACT, SYNTHESIZE
 from .question_scope import (
     SCOPE_INSTRUCTION, candidate_scopes, identifier_limits, scope_error, source_boundaries, unreviewed_boundaries,
 )
@@ -579,7 +582,8 @@ def _check_traces(raw, by_id, required, findings):
     return errors, paths, evidence_ids
 
 
-def _set_result(raw, claims, blocks, required, references, signals=(), verified_refs=(), boundaries=None):
+def _set_result(raw, claims, blocks, required, references, signals=(), verified_refs=(), boundaries=None,
+                capacities=()):
     _nonempty(raw, "assessment", "readiness")
     if any(not step.strip() for step in raw["priorities"]):
         raise ValueError("Пустой шаг в порядке исправлений")
@@ -615,6 +619,13 @@ def _set_result(raw, claims, blocks, required, references, signals=(), verified_
     if boundary_errors := unreviewed_boundaries(boundaries or {}, claims, findings, resolved):
         errors.extend(boundary_errors)
         paths.extend(["/resolved/-", "/findings/-"])
+    for pair in capacities:
+        if unresolved_capacity(pair, findings, resolved):
+            errors.append(capacity_diagnosis(pair))
+            paths.extend(["/findings/-", "/priorities/-", "/resolved/-"])
+            paths.extend(f"/findings/{i}" for i, entry in checked.items() if capacity_linked(pair, entry))
+            paths.extend(f"/resolved/{i}" for i, entry in enumerate(raw["resolved"])
+                         if entry["id"] in pair["limit_ids"] + pair["instance_ids"])
     for signal in signals:
         ids = set(signal["claims"])
         if not ids or grouped_in(signal, findings):
@@ -703,6 +714,30 @@ def _check_case(d, original, source_quotes):
         raise ValueError("Условный конфликт при недоказанной предпосылке не является критичным или блокирующим")
 
 
+def _asks_about_input_class(question, obligation):
+    """Recognize a question about membership in a class used to trigger the rule."""
+    question = question.casefold().replace("ё", "е")
+    obligation = obligation.casefold().replace("ё", "е")
+    membership = re.search(r"\b(?:считать|счита\w*ся|признать|призна\w*ся|распознать|отнести к)\b", question)
+    if not membership:
+        return False
+    # Only the condition can establish an input class. A qualifier in the
+    # prescribed action may instead describe its still-undefined output.
+    conditions = re.findall(
+        r"\b(?:при|если|когда|в случае)\s+([^,;.!?]+?)(?=[,;.!?]|\s+(?:долж\w+|обязан\w*|требуется|следует)\b|$)",
+        obligation)
+    if not conditions:
+        return False
+    subject = re.split(r"\b(?:для|чтобы|если|при)\b|[?;]", question[membership.end():], maxsplit=1)[0]
+    # Compare inflected adjectives, e.g. a class in the instrumental case
+    # after «считать» against the same class in the condition's genitive case.
+    adjective_stem = r"\b([а-я]{3,}?)(?:%s)\b"
+    endings = "ого|его|ому|ему|ыми|ими|ую|юю|ая|яя|ое|ее|ые|ие|ым|им|ый|ий|ой|ей|ом|ем|ых|их"
+    class_endings = endings if membership[0] == "распознать" else "ыми|ими|ым|им|ой|ей"
+    classes = set(re.findall(adjective_stem % class_endings, subject))
+    return bool(classes.intersection(re.findall(adjective_stem % endings, " ".join(conditions))))
+
+
 def _check_question(d, f, source_quotes):
     """Check the obligation, possible answers, and evidence for competing readings."""
     checks = d["question_check"]
@@ -746,6 +781,14 @@ def _check_question(d, f, source_quotes):
     elif readings:
         raise DraftError("reading_support предназначен только для двух трактовок оставленной неоднозначности", path)
     if needs_check and not ambiguous:
+        if (state in {"открытый выбор", "не задан результат действия", "неполный приёмочный сценарий",
+                      "не определено значение термина"}
+                and _asks_about_input_class(f["question"], source_quotes[obligation])):
+            if re.search(r"(?:\?\s*|\bи\s+)(?:что|где|когда|сколько|как\w*)\b", f["question"], re.I):
+                raise DraftError("Вопрос объединяет распознавание входного условия и ещё один выбор. "
+                                 "Оставь на этой карточке один вопрос и соответствующие ему исходы.", path)
+            state = "не определено значение термина"
+            check = dict(check, state=state)
         if state in {"неполный приёмочный сценарий", "не задан результат действия"}:
             f["category"] = "Полнота"
         elif state == "не определено значение термина":
@@ -827,7 +870,7 @@ def _adjudicate_one(d, original, source_quotes=None):
     return f
 
 
-def _final_decisions(raw, candidates, claims, signals=(), verified_refs=()):
+def _final_decisions(raw, candidates, claims, signals=(), verified_refs=(), capacities=(), unbound_examples=None):
     _nonempty(raw, "assessment", "readiness")
     originals = {f["id"]: f for f in candidates}
     source_quotes = {c["id"]: c["quote"] for c in claims}
@@ -843,6 +886,8 @@ def _final_decisions(raw, candidates, claims, signals=(), verified_refs=()):
         prior = originals[ident]
         try:
             finding = _adjudicate_one(decision, prior, source_quotes)
+            if issue := input_scope_error(finding, prior, unbound_examples):
+                raise DraftError(issue, ["/action", "/case_check", "/question_mode", "/question", "/test", "/question_check"])
             if issue := scope_error(finding, prior, source_quotes):
                 raise DraftError(issue, ["/action", "/question_mode", "/question", "/test", "/question_check"])
             if finding and not has_independent_basis(finding, verified_refs, source_quotes):
@@ -891,6 +936,11 @@ def _final_decisions(raw, candidates, claims, signals=(), verified_refs=()):
     if seen != originals.keys():
         errors.append("Нет решения по замечаниям " + ", ".join(sorted(originals.keys() - seen)))
         paths.append("/decisions/-")
+    for pair in capacities:
+        rejected = missing_capacity_basis(pair, kept, raw["decisions"], originals)
+        if rejected:
+            errors.append(capacity_diagnosis(pair))
+            paths.extend(f"/decisions/{i}" for i in rejected)
     for signal in signals:
         if signal["type"] != "unit_scale" or signal["qualified"] or grouped_in(signal, kept):
             continue
@@ -1001,6 +1051,14 @@ def review(document, provider, progress=lambda msg: None):
     if signals:
         payload["source_signals"] = signals
     instructions = ("\n" + SIGNAL_INSTRUCTION if signals else "")
+    unbound_examples = unbound_response_examples(document.blocks)
+    if unbound_examples:
+        payload["response_examples_without_request"] = unbound_examples
+        instructions += "\n" + EXAMPLE_SCOPE_INSTRUCTION
+    capacities = capacity_pairs(document.blocks, claims)
+    if capacities:
+        payload["capacity_pairs"] = capacities
+        instructions += "\n" + CAPACITY_INSTRUCTION
     boundaries = source_boundaries(document.blocks)
     if boundaries:
         payload["source_boundaries"] = boundaries
@@ -1012,7 +1070,8 @@ def review(document, provider, progress=lambda msg: None):
         payload["verified_references"] = [{"target": f["missing_target"], "evidence": f["evidence"]} for f in verified_refs]
     candidates, resolved, trace_review = _request(
         provider, SYNTHESIZE + instructions, payload, GLOBAL,
-        lambda data: _set_result(data, claims, blocks, required, references, signals, verified_refs, boundaries), progress)
+        lambda data: _set_result(data, claims, blocks, required, references, signals, verified_refs, boundaries,
+                                 capacities), progress)
     stage("adjudication")
     progress(f"Независимая проверка оснований и вопросов по всему источнику: замечаний {len(candidates)}.")
     fixed = [f for f in candidates if f.get("missing_target")]
@@ -1020,8 +1079,12 @@ def review(document, provider, progress=lambda msg: None):
     audit_payload = {"blocks": payload["blocks"], "candidates": [_audit_candidate(f) for f in candidates],
                      "trace_review": trace_review,
                      "claims": [{k: c[k] for k in ("id", "block", "quote")} for c in claims]}
+    if unbound_examples:
+        audit_payload["response_examples_without_request"] = unbound_examples
     if boundaries:
         audit_payload["source_boundaries"] = boundaries
+    if capacities:
+        audit_payload["capacity_pairs"] = capacities
     if scopes := candidate_scopes(candidates):
         audit_payload["question_scopes"] = scopes
         if not check_scope:
@@ -1032,7 +1095,8 @@ def review(document, provider, progress=lambda msg: None):
         audit_payload["verified_references"] = [_audit_candidate(f) for f in fixed]
     findings, notes, set_review = _request(provider, ADJUDICATE + instructions,
                                           audit_payload, AUDIT,
-                                          lambda data: _final_decisions(data, candidates, claims, signals, fixed), progress)
+                                          lambda data: _final_decisions(data, candidates, claims, signals, fixed,
+                                                                        capacities, unbound_examples), progress)
     stage("validation")
     for claim in claims:
         ident = claim["id"]

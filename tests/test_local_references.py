@@ -14,6 +14,15 @@ def blocks(lines, page=None):
 
 
 class NamedReferenceTest(unittest.TestCase):
+    def test_named_target_after_an_attribution_without_a_section_label(self):
+        source = blocks(["# Audio catalogue", "AX-1. Play the tone defined in AX-37.",
+                         "AX-2. See ax-8 for the recorded voice.", "AX-8. Use voice B.",
+                         "AX-3. Вывести сообщение, приведённое в AX-42.",
+                         "AX-4. Use the option specified in AX-71 of the external manual.",
+                         "AX-5. Display the literal label AX-63.", "AX-6. Read the value listed in BZ-99.",
+                         "AX-7. Use the colour listed in ax-48."])
+        self.assertEqual({r["target"] for r in missing_references(source)}, {"AX-37", "AX-42", "ax-48"})
+
     def test_existing_targets_tables_headings_and_external_scopes(self):
         source = blocks(['# Calibration', 'AX-1. Вычислить по правилу AX-17.', 'AX-17. Приставить груз.',
                          'AX-2. См. правило AX-19.', '## AX-19 Проверка', 'AX-3. Открыть по пункту AX-21.',

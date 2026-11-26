@@ -29,6 +29,12 @@ _TIMING = _pattern(r"срок|задержк|интервал|за какое в
 _STATE = _pattern(r"признак|флаг|статус\w* (?:отправ|переда)|отметк|отмеч\w*|помеч\w*|маркер|marker|flag|(?:delivery|dispatch|send) status|mark as")
 _TRANSFER = _pattern(r"отправ|переда|переда[её]т|передач|направл|отсыла|постановк\w* в очеред|"
                      r"hand.?off|dispatch|enqueue|send|sent|forward|transfer")
+_DISPATCH_MARKER = _pattern(
+    r"(?:признак|флаг|статус|отметк|маркер)\w*\s+(?:(?:об?\s+)?(?:факт\w*|успешн\w*|состояни\w*)\s+)*"
+    r"(?:отправк|передач|отправлен|передан)|"
+    r"(?:отмеча|помеча)\w*[^.;\n]{0,50}как отправлен|(?:sent|dispatch|handoff|send|transmission)[ _-](?:flag|marker|status)|"
+    r"(?:mark|record)\w*[^.;\n]{0,40}as sent|\b(?:isSent|sent_at|sentAt)\b"
+)
 _BOUND = _pattern(r"в течение|не позднее|до истечения|не более|не дольше|максимальн\w* задержк|"
                   r"within|no later than|at most|не превыша\w*")
 _GOAL = _pattern(r"в момент|сразу|своевременно|оперативно|немедленно|promptly|immediately|in real time")
@@ -92,7 +98,7 @@ def source_boundaries(blocks):
     if not deadlines:
         return {}
     goals = [block.id for block in blocks if _GOAL.search(block.text) and re.search(_RECIPIENT, block.text, re.I)]
-    flags = [block.id for block in blocks if _STATE.search(block.text) and _TRANSFER.search(block.text)]
+    flags = [block.id for block in blocks if _DISPATCH_MARKER.search(block.text)]
     if not goals and not flags:
         return {}
     return {"timed_handoff": deadlines, "recipient_goals": goals, "recorded_state": flags}
@@ -139,6 +145,8 @@ def scope_error(finding, original, source_quotes):
                     "вопрос. Для сохранения укажи в checked_ids прямое разрешение такого значения или "
                     "пример действительного идентификатора с соответствующими символами.")
     elif kind == "событие фиксации отправки":
+        if not any(_DISPATCH_MARKER.search(quote) for quote in quotes):
+            return ""
         observations = " ".join([question, finding["test"], proof.get("decision", ""), *proof.get("outcomes", [])])
         if (not any(_RECEIPT.search(q) and not _NO_RECEIPT.search(q) for q in quotes)
                 and (_RECEIVER_OBSERVATION.search(observations)
