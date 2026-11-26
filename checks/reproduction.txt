@@ -1,0 +1,97 @@
+2026-11-26T17:18:39+05:00
+
+> git clone --quiet --no-hardlinks <source> <clone>
+
+> git checkout --quiet --detach 8ff84af10cbcc72ae8af96882e2b291c5245a927
+
+> git status --porcelain (before)
+
+> git rev-parse HEAD
+8ff84af10cbcc72ae8af96882e2b291c5245a927
+
+> python --version
+Python 3.12.14
+
+> python -I -m venv <venv>
+
+> verify empty isolated venv
+OK
+
+> python -I -m pip --isolated --disable-pip-version-check install --no-cache-dir --index-url https://pypi.org/simple -r requirements.txt
+Collecting pypdf==6.21.4 (from -r requirements.txt (line 1))
+  Downloading pypdf-6.21.4-py3-none-any.whl.metadata (7.6 kB)
+Downloading pypdf-6.21.4-py3-none-any.whl (410 kB)
+Installing collected packages: pypdf
+Successfully installed pypdf-6.21.4
+
+> verify installed package location
+6.21.4 <venv>\Lib\site-packages\pypdf\__init__.py
+
+> python -m pip check
+No broken requirements found.
+
+> python -m requirements_validator --help
+usage: __main__.py [-h] --input INPUT --output OUTPUT
+
+Статическое ревью требований в Markdown или текстовом PDF.
+
+options:
+  -h, --help       show this help message and exit
+  --input INPUT    исходный файл .md или .pdf
+  --output OUTPUT  путь для полного отчёта .md
+
+> python -m unittest discover -v
+test_failure_in_replace_preserves_output_and_cleans_temp (tests.test_cli.FileSafetyTest.test_failure_in_replace_preserves_output_and_cleans_temp) ... ok
+test_previous_report_survives_provider_and_validation_errors (tests.test_cli.FileSafetyTest.test_previous_report_survives_provider_and_validation_errors) ... ok
+test_reject_input_as_output_and_wrong_output_suffix (tests.test_cli.FileSafetyTest.test_reject_input_as_output_and_wrong_output_suffix) ... ok
+test_audit_can_replace_one_scalar_and_remove_two_original_duplicates (tests.test_engine.TestReview.test_audit_can_replace_one_scalar_and_remove_two_original_duplicates) ... ok
+test_audit_rejects_missing_duplicate_or_speculative_verdicts (tests.test_engine.TestReview.test_audit_rejects_missing_duplicate_or_speculative_verdicts) ... ok
+test_chunks_still_reach_one_complete_review (tests.test_engine.TestReview.test_chunks_still_reach_one_complete_review) ... ok
+test_cross_section_result_and_coverage (tests.test_engine.TestReview.test_cross_section_result_and_coverage) ... ok
+test_empty_reference_expands_validated_quote (tests.test_engine.TestReview.test_empty_reference_expands_validated_quote) ... ok
+test_empty_scope_requires_grounded_explanation_even_with_local_labels_empty (tests.test_engine.TestReview.test_empty_scope_requires_grounded_explanation_even_with_local_labels_empty) ... ok
+test_gap_excluded_from_defect_count (tests.test_engine.TestReview.test_gap_excluded_from_defect_count) ... ok
+test_global_correction_only_appends_missing_resolution (tests.test_engine.TestReview.test_global_correction_only_appends_missing_resolution) ... ok
+test_missing_block_retried_alone_with_read_only_neighbours (tests.test_engine.TestReview.test_missing_block_retried_alone_with_read_only_neighbours) ... ok
+test_one_invalid_claim_replaces_whole_block (tests.test_engine.TestReview.test_one_invalid_claim_replaces_whole_block) ... ok
+test_only_applicable_protocol_can_supply_a_reference (tests.test_engine.TestReview.test_only_applicable_protocol_can_supply_a_reference) ... ok
+test_patch_cannot_overwrite_good_results (tests.test_engine.TestReview.test_patch_cannot_overwrite_good_results) ... ok
+test_question_downgrade_keeps_only_verified_source (tests.test_engine.TestReview.test_question_downgrade_keeps_only_verified_source) ... ok
+test_resolves_local_risk_using_context (tests.test_engine.TestReview.test_resolves_local_risk_using_context) ... ok
+test_retracted_candidate_leaves_no_issue_or_question (tests.test_engine.TestReview.test_retracted_candidate_leaves_no_issue_or_question) ... ok
+test_retry_schema_errors_and_retains_valid_blocks (tests.test_engine.TestReview.test_retry_schema_errors_and_retains_valid_blocks) ... ok
+test_same_rule_can_have_resolved_and_independent_finding (tests.test_engine.TestReview.test_same_rule_can_have_resolved_and_independent_finding) ... ok
+test_schema_and_invalid_quote_rejected (tests.test_engine.TestReview.test_schema_and_invalid_quote_rejected) ... ok
+test_separate_standard_reference_for_requested_operation_effect (tests.test_engine.TestReview.test_separate_standard_reference_for_requested_operation_effect) ... ok
+test_two_supported_readings_are_counted (tests.test_engine.TestReview.test_two_supported_readings_are_counted) ... ok
+test_unaddressable_rows_never_enter_report (tests.test_engine.TestReview.test_unaddressable_rows_never_enter_report) ... ok
+test_unaligned_or_nonexistent_anchor_rejected (tests.test_engine.TestReview.test_unaligned_or_nonexistent_anchor_rejected) ... ok
+test_valid_patch_must_pass_complete_revalidation (tests.test_engine.TestReview.test_valid_patch_must_pass_complete_revalidation) ... ok
+test_value_trace_requires_actual_provider_or_a_linked_question (tests.test_engine.TestReview.test_value_trace_requires_actual_provider_or_a_linked_question) ... ok
+test_withdrawn_id_rejected_in_final_priorities (tests.test_engine.TestReview.test_withdrawn_id_rejected_in_final_priorities) ... ok
+test_authentication_never_leaks_secret (tests.test_provider.ProviderTests.test_authentication_never_leaks_secret) ... ok
+test_codex_runs_in_separate_directory_with_schema (tests.test_provider.ProviderTests.test_codex_runs_in_separate_directory_with_schema) ... ok
+test_codex_timeout_and_access (tests.test_provider.ProviderTests.test_codex_timeout_and_access) ... ok
+test_dotenv_is_data_and_environment_takes_precedence (tests.test_provider.ProviderTests.test_dotenv_is_data_and_environment_takes_precedence) ... ok
+test_gemini_checks_catalog_and_records_version (tests.test_provider.ProviderTests.test_gemini_checks_catalog_and_records_version) ... ok
+test_long_retry_after_exits_before_another_request (tests.test_provider.ProviderTests.test_long_retry_after_exits_before_another_request) ... ok
+test_model_must_support_generation (tests.test_provider.ProviderTests.test_model_must_support_generation) ... ok
+test_partial_and_malformed_model_responses (tests.test_provider.ProviderTests.test_partial_and_malformed_model_responses) ... ok
+test_quota_is_not_retried (tests.test_provider.ProviderTests.test_quota_is_not_retried) ... ok
+test_rate_limit_honors_retry_after (tests.test_provider.ProviderTests.test_rate_limit_honors_retry_after) ... ok
+test_timeouts_bounded (tests.test_provider.ProviderTests.test_timeouts_bounded) ... ok
+test_external_rule_is_separate_from_the_document_quote (tests.test_report.ReferenceRenderingTest.test_external_rule_is_separate_from_the_document_quote) ... ok
+test_blank_and_unreadable_pdf_pages (tests.test_source.SourceTests.test_blank_and_unreadable_pdf_pages) ... ok
+test_input_diagnostics (tests.test_source.SourceTests.test_input_diagnostics) ... EOF marker not found
+ok
+test_markdown_byte_hash_locations_sections_and_ids (tests.test_source.SourceTests.test_markdown_byte_hash_locations_sections_and_ids) ... ok
+test_native_pdf_layout_and_font_heading (tests.test_source.SourceTests.test_native_pdf_layout_and_font_heading) ... ok
+test_unchecked_rows_and_differently_scoped_list_numbers (tests.test_source.SourceTests.test_unchecked_rows_and_differently_scoped_list_numbers) ... ok
+
+----------------------------------------------------------------------
+Ran 45 tests in 0.588s
+
+OK
+
+> git status --porcelain (after)
+Exit code 0
