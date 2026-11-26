@@ -1,0 +1,12 @@
+2026-11-26T23:30:58+05:00
+> python -m requirements_validator --input checks/holdout/inputs/case-k/control.md --output checks/holdout/runs/after/case-k-base/report.md
+Документ «Партия для учебного баяна» · исходных блоков 5 · SHA-256 a65941596b374b7efdcd0a0f795c0762c1ba4680451772d640fadb368e82121b
+Версия 31ea961359915ef65910eddd2ea750d37ccefc57 · рабочая копия чистая
+Доступ подтверждён · OpenAI через Codex CLI · gpt-6.2-sol
+Выделение и оценка утверждений: пакет 1, блоков 5.
+Сквозная проверка всего документа: утверждений 15.
+Независимая проверка оснований и вопросов по всему источнику: замечаний 0.
+Отчёт сохранён в ./checks/holdout/runs/after/case-k-base/report.md
+Метрики сохранены в ./checks/holdout/runs/after/case-k-base/report/run-meta.json
+Готово за 78.7 с, включая запись · запросов модели 4 (повторных 0) · токены входа 61364, выхода 3111 · утверждений 15 · нарушений 0 · вопросов 0
+Exit 0, 78.8 s
