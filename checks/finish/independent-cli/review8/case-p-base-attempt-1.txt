@@ -1,0 +1,12 @@
+2026-11-27T02:38:06+05:00
+> python -m requirements_validator --input checks/finish/independent/case-p/control.md --output checks/finish/independent-runs/review8/case-p-base/report.md
+Документ «Учебный стенд для мозаики» · исходных блоков 6 · SHA-256 32939f835003de2870d5188b3ff87883f1cb4def402003a2b90b387eec27cb74
+Версия 48f37df5a9dbc5b52799d7bbd37870efe70c885e · рабочая копия чистая
+Доступ подтверждён · OpenAI через Codex CLI · gpt-6.2-sol
+Выделение и оценка утверждений: пакет 1, блоков 6.
+Сквозная проверка всего документа: утверждений 16.
+Независимая проверка оснований и вопросов по всему источнику: замечаний 0.
+Отчёт сохранён в ./checks/finish/independent-runs/review8/case-p-base/report.md
+Метрики сохранены в ./checks/finish/independent-runs/review8/case-p-base/report/run-meta.json
+Готово за 99.4 с, включая запись · запросов модели 4 (повторных 0) · токены входа 63962, выхода 4083 · утверждений 16 · нарушений 0 · вопросов 0
+Exit 0, 99.6 s
