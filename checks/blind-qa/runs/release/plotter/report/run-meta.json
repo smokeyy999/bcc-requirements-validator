@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "report_format_version": 2,
+  "source": "variant.md",
+  "source_sha256": "089f0af92a87bcd3d9e0a826808b4946bad3de72d79e5f364806d3f6ea206022",
+  "source_blocks": 5,
+  "report": "report.md",
+  "report_sha256": "2827df23c97cce0a018efc19b762709d12e32c73d5ddfafcd5ad0636593c06b9",
+  "started_at": "2026-11-26T23:47:34+05:00",
+  "finished_at": "2026-11-26T23:49:47+05:00",
+  "provider": "OpenAI через Codex CLI",
+  "model": "gpt-6.2-sol",
+  "generation": {
+    "requested_model": "gpt-6.2-sol",
+    "model_version_reported": null,
+    "cli_version": "0.171.0-alpha.13",
+    "reasoning_effort": "medium",
+    "temperature": null,
+    "seed": null,
+    "extract_workers": 1,
+    "tokens_source": "codex exec --json: turn.completed.usage; provider output_tokens unmodified"
+  },
+  "commit": "fa37472f35441307f7381e879654200a81cbb0aa",
+  "working_tree": "чистая",
+  "elapsed_seconds": 132.828,
+  "stage_seconds": {
+    "read": 0.133,
+    "probe": 4.544,
+    "extract": 46.312,
+    "cross_review": 57.853,
+    "adjudication": 23.945,
+    "validation": 0.0,
+    "render": 0.04
+  },
+  "transport_requests": 4,
+  "model_calls": 4,
+  "successful_model_calls": 4,
+  "retry_model_calls": 0,
+  "repair_model_calls": 0,
+  "transport_retries": 0,
+  "tokens": {
+    "input_tokens": 63578,
+    "output_tokens": 5728,
+    "cached_input_tokens": 34688,
+    "reasoning_tokens": 667
+  },
+  "token_coverage": {
+    "input_tokens": {
+      "reporting_calls": 4,
+      "reported_sum": 63578
+    },
+    "output_tokens": {
+      "reporting_calls": 4,
+      "reported_sum": 5728
+    },
+    "cached_input_tokens": {
+      "reporting_calls": 4,
+      "reported_sum": 34688
+    },
+    "reasoning_tokens": {
+      "reporting_calls": 4,
+      "reported_sum": 667
+    }
+  },
+  "calls_without_io_tokens": 0,
+  "cost_usd": null,
+  "cost_basis": "Аккаунт не сообщает фактический тариф и начисления за этот запуск.",
+  "requests": [
+    {
+      "number": 1,
+      "stage": "probe",
+      "operation": "generation",
+      "purpose": "initial",
+      "transport_attempt": 1,
+      "ok": true,
+      "input_tokens": 12155,
+      "output_tokens": 15,
+      "cached_input_tokens": 11904,
+      "reasoning_tokens": 0,
+      "seconds": 4.54
+    },
+    {
+      "number": 2,
+      "stage": "extract",
+      "operation": "generation",
+      "purpose": "initial",
+      "transport_attempt": 1,
+      "ok": true,
+      "input_tokens": 13811,
+      "output_tokens": 2112,
+      "cached_input_tokens": 11136,
+      "reasoning_tokens": 488,
+      "seconds": 46.303
+    },
+    {
+      "number": 3,
+      "stage": "cross_review",
+      "operation": "generation",
+      "purpose": "initial",
+      "transport_attempt": 1,
+      "ok": true,
+      "input_tokens": 17518,
+      "output_tokens": 2630,
+      "cached_input_tokens": 11648,
+      "reasoning_tokens": 179,
+      "seconds": 57.847
+    },
+    {
+      "number": 4,
+      "stage": "adjudication",
+      "operation": "generation",
+      "purpose": "initial",
+      "transport_attempt": 1,
+      "ok": true,
+      "input_tokens": 20094,
+      "output_tokens": 971,
+      "cached_input_tokens": 0,
+      "reasoning_tokens": 0,
+      "seconds": 23.943
+    }
+  ],
+  "elapsed_scope": "От входа в CLI-проверку до подготовки метрики для записи, включая формирование Markdown.",
+  "counts": {
+    "requirements": 16,
+    "defects": 2,
+    "ambiguities": 0,
+    "gaps": 0,
+    "recommendations": 0,
+    "questions": 2,
+    "critical_defects": 2,
+    "blocking_questions": 2
+  }
+}

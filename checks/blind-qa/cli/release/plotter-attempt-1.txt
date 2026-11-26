@@ -1,0 +1,12 @@
+2026-11-26T23:47:34+05:00
+> python -m requirements_validator --input checks/blind-qa/inputs/plotter/variant.md --output checks/blind-qa/runs/release/plotter/report.md
+Документ «Установка указателя на макете железной дороги» · исходных блоков 5 · SHA-256 089f0af92a87bcd3d9e0a826808b4946bad3de72d79e5f364806d3f6ea206022
+Версия fa37472f35441307f7381e879654200a81cbb0aa · рабочая копия чистая
+Доступ подтверждён · OpenAI через Codex CLI · gpt-6.2-sol
+Выделение и оценка утверждений: пакет 1, блоков 5.
+Сквозная проверка всего документа: утверждений 16.
+Независимая проверка оснований и вопросов по всему источнику: замечаний 2.
+Отчёт сохранён в ./checks/blind-qa/runs/release/plotter/report.md
+Метрики сохранены в ./checks/blind-qa/runs/release/plotter/report/run-meta.json
+Готово за 132.8 с, включая запись · запросов модели 4 (повторных 0) · токены входа 63578, выхода 5728 · утверждений 16 · нарушений 2 · вопросов 2
+Exit 0, 132.9 s
