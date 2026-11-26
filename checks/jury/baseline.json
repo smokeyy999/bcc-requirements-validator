@@ -1,0 +1,195 @@
+{
+  "analysis_commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+  "model": "gpt-6.2-sol",
+  "rounds": [
+    {
+      "round": 1,
+      "matched": 11,
+      "seeds": 15,
+      "published_findings": 32
+    },
+    {
+      "round": 2,
+      "matched": 11,
+      "seeds": 15,
+      "published_findings": 27
+    },
+    {
+      "round": 3,
+      "matched": 12,
+      "seeds": 15,
+      "published_findings": 29
+    }
+  ],
+  "original_evaluation_sha256": "1d26875193d7443ba3d71d038a05a4c2273a169f629990af366746ed2fdd7959",
+  "reports": [
+    {
+      "document": "dispatch",
+      "round": "r1",
+      "source_sha256": "1e507ca671de044391a0b51e7db97e070470c73923ec6e9d2337b9447027d115",
+      "report_sha256": "f93be865675027d6856941ea1a7a092d6ab67abd4deb44e13b35687f872cf1a1",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "dispatch",
+      "round": "r2",
+      "source_sha256": "1e507ca671de044391a0b51e7db97e070470c73923ec6e9d2337b9447027d115",
+      "report_sha256": "8fe7cbb6068f4ddc4c1640b6aa0f9d8ce2044a60fc259d358423e92b755d7180",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "dispatch",
+      "round": "r3",
+      "source_sha256": "1e507ca671de044391a0b51e7db97e070470c73923ec6e9d2337b9447027d115",
+      "report_sha256": "caa80407b5dabd0b543d52fa13fba612e7abbe36c7534fecca5f48897a25a929",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "dispatch-base",
+      "round": "r1",
+      "source_sha256": "197a424a498a7d9017930b231316a846acbdc832111d13fad2a0cf165a3c1e4d",
+      "report_sha256": "47c233b88daa7035e998039b9decd17fabec06366e253cbf26fc3cbf01d52609",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "dispatch-base",
+      "round": "r2",
+      "source_sha256": "197a424a498a7d9017930b231316a846acbdc832111d13fad2a0cf165a3c1e4d",
+      "report_sha256": "1c44c2945ab0c18a1400aff27528ed8dc80bdd74f9e05c2e9ce92125e7095470",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "dispatch-base",
+      "round": "r3",
+      "source_sha256": "197a424a498a7d9017930b231316a846acbdc832111d13fad2a0cf165a3c1e4d",
+      "report_sha256": "9de213fec5cafabdca8ae48f39be16728ff31ba75732758d905632a91d8ab7be",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "indicator",
+      "round": "r1",
+      "source_sha256": "8117b8fb6907ce1af2f4ae4a3d0f16d4abf9ef46010edfc2a217c31931a3a7a2",
+      "report_sha256": "1c35f2ab853bbae3ca44cc13823364717ea5a8a43949493a4b09cb7e439412ed",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "indicator",
+      "round": "r2",
+      "source_sha256": "8117b8fb6907ce1af2f4ae4a3d0f16d4abf9ef46010edfc2a217c31931a3a7a2",
+      "report_sha256": "f8dd8e9ff4f5551f63c3a7f9cd7c5d5a2cc09764d03021ecdb2623647343eca5",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "indicator",
+      "round": "r3",
+      "source_sha256": "8117b8fb6907ce1af2f4ae4a3d0f16d4abf9ef46010edfc2a217c31931a3a7a2",
+      "report_sha256": "6ed79aae9350113242e8b5c2ff09033051c146e9edb7c04fb7420d379e24e64e",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "irrigation",
+      "round": "r1",
+      "source_sha256": "1edf90ca21c24de23059219721af3040d926afbf610089d5f5f68da36489a3f7",
+      "report_sha256": "c23e46b542f22e20c00e6a01718e823ba133daaa2977d478c7571a56e23670df",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "irrigation",
+      "round": "r2",
+      "source_sha256": "1edf90ca21c24de23059219721af3040d926afbf610089d5f5f68da36489a3f7",
+      "report_sha256": "ffcff60730804278c5c098c6a885281171132d7d5b0f105464d8a527d3075ce4",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "irrigation",
+      "round": "r3",
+      "source_sha256": "1edf90ca21c24de23059219721af3040d926afbf610089d5f5f68da36489a3f7",
+      "report_sha256": "418b76c8a4b78e5992ad674df62caccfb5b2550a1ad4790074d8328e1b945e42",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "irrigation-base",
+      "round": "r1",
+      "source_sha256": "1fff097659233b6c75735ba3d38f3e444b716cbb5a2185dc0b83264ffbb355b5",
+      "report_sha256": "535832d172f092946b56fc6354dd69e65a00c1310de895d50f76a8b60b1757db",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "irrigation-base",
+      "round": "r2",
+      "source_sha256": "1fff097659233b6c75735ba3d38f3e444b716cbb5a2185dc0b83264ffbb355b5",
+      "report_sha256": "8a2d3a5c81464f0ca661beda8fc643c7c065077daaba4fb017c5ef823faa0012",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "irrigation-base",
+      "round": "r3",
+      "source_sha256": "1fff097659233b6c75735ba3d38f3e444b716cbb5a2185dc0b83264ffbb355b5",
+      "report_sha256": "ac7a68b617ecafda2d16f160bd0c1127c423978d6dbea704d41da56baf388656",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "subtitles",
+      "round": "r1",
+      "source_sha256": "ea6fe612b993d5cfa1a728821cf9c5c347f32e62ded42da27f1707a2df19f777",
+      "report_sha256": "9626ab2f84563e150d64ec54961be4df214f92e14dd11acc99b1c668a676321f",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "subtitles",
+      "round": "r2",
+      "source_sha256": "ea6fe612b993d5cfa1a728821cf9c5c347f32e62ded42da27f1707a2df19f777",
+      "report_sha256": "4c5f18918e0db95c088356082adadea8d98d7fbca84fda335bff53bb9a77068f",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "subtitles",
+      "round": "r3",
+      "source_sha256": "ea6fe612b993d5cfa1a728821cf9c5c347f32e62ded42da27f1707a2df19f777",
+      "report_sha256": "eb4527bbb2e021a90fc6ed41ca9a4fedafa508c8583ef17223ed091d222c53a2",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "subtitles-base",
+      "round": "r1",
+      "source_sha256": "b220384c1ba6223d9e3492b135bc7279740d6a62e33f237fc132aeb4610be25b",
+      "report_sha256": "319f5fce436f91cfebd1fd3afc402b4dee44bc51c20b4fc31810335cbb9b48de",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "subtitles-base",
+      "round": "r2",
+      "source_sha256": "b220384c1ba6223d9e3492b135bc7279740d6a62e33f237fc132aeb4610be25b",
+      "report_sha256": "13c53fd7cf25e6d1736cc97963566b798d1eaf90648f801ac6c858512dd1d90a",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    },
+    {
+      "document": "subtitles-base",
+      "round": "r3",
+      "source_sha256": "b220384c1ba6223d9e3492b135bc7279740d6a62e33f237fc132aeb4610be25b",
+      "report_sha256": "99592fa1d7b4eb3e416e1efd5aa36d2a6b30a4635da394794a8f718d220773d1",
+      "commit": "6928574ff569af90162bc58bf201440fe710cb0f",
+      "model": "gpt-6.2-sol"
+    }
+  ]
+}

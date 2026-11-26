@@ -1,0 +1,14 @@
+2026-11-26T20:56:00+05:00
+> python -m requirements_validator --input benchmark/subtitles/requirements.md --output reports/jury/benchmark-runs/subtitles/r3/report.md
+Документ «Subtitle track export» · исходных блоков 9 · SHA-256 ea6fe612b993d5cfa1a728821cf9c5c347f32e62ded42da27f1707a2df19f777
+Версия 78864ebc263344838d5e69dee4d8ea9fbe9df6fe · рабочая копия чистая
+Доступ подтверждён · OpenAI через Codex CLI · gpt-6.2-sol
+Выделение и оценка утверждений: пакет 1, блоков 9.
+Сквозная проверка всего документа: утверждений 13.
+Проверка черновика: /findings/4: В fix есть число, не подтверждённое цитатами. Исправь правку или задай вопрос с тестом
+Нет результата сквозной проверки кандидатов R-M0010-01. Запрошена одна точечная правка.
+Независимая проверка оснований и вопросов по всему источнику: замечаний 5.
+Отчёт сохранён в ./reports/jury/benchmark-runs/subtitles/r3/report.md
+Метрики сохранены в ./reports/jury/benchmark-runs/subtitles/r3/report/run-meta.json
+Готово за 169.9 с, включая запись · запросов модели 5 (повторных 1) · токены входа 79998, выхода 7379 · утверждений 13 · нарушений 4 · вопросов 4
+Exit 0, 170.0 s
