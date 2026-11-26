@@ -289,7 +289,15 @@ def _local_review(provider, batch, all_blocks, progress):
     targets = batch
     for attempt in range(2):
         with purpose("block_retry" if attempt else "initial"):
-            result = provider.ask(EXTRACT + "\n\nВход (JSON):\n" + compact(payload), LOCAL)
+            instruction = EXTRACT
+            if getattr(provider, "keyed_review", False) is True:
+                instruction += ("\nРазложи каждое составное предложение. Например, строка «Печать разрешена "
+                                "сотруднику, очередь вмещает 20 заданий, по умолчанию выбран дуплекс» даёт "
+                                "три самостоятельно проверяемых правила. Перечисление видимых полей может "
+                                "дать несколько проверок с одной и той же исходной цитатой. Не сворачивай "
+                                "числовые условия, исключения, начальные состояния и наблюдаемые результаты "
+                                "в одно общее резюме абзаца.")
+            result = provider.ask(instruction + "\n\nВход (JSON):\n" + compact(payload), LOCAL)
         valid, errors, outside = _local_parts(result, targets)
         accepted.update(valid)
         if outside:
@@ -391,7 +399,7 @@ def _finding(raw, by_id, blocks, references):
 SEVERITIES = ["Критичная", "Существенная", "Низкая"]
 
 
-def _merge(findings):
+def _merge(findings, *, merge_review_directions=False):
     """Свести повтор одной причины, сохранив ссылки с обеих сторон."""
     unique = []
     for finding in findings:
@@ -400,7 +408,9 @@ def _merge(findings):
             other = {(a["id"], a["quote"]) for a in previous["evidence"]}
             same_topic = _canon(previous["topic"]) == _canon(finding["topic"])
             same_case = _canon(previous["scenario"]) == _canon(finding["scenario"])
-            if (previous["kind"] == finding["kind"] and previous["category"] == finding["category"]
+            same_class = previous["category"] == finding["category"]
+            same_cited_rule = (merge_review_directions and previous["reference"] and same_topic and anchors == other)
+            if (previous["kind"] == finding["kind"] and (same_class or same_cited_rule)
                     and previous["reference"] == finding["reference"]
                     and anchors & other and (same_topic or (anchors == other and same_case))):
                 previous["ids"] = sorted(set(previous["ids"]) | set(finding["ids"]))
@@ -460,7 +470,7 @@ def _check_traces(raw, by_id, required, findings):
     return errors, paths
 
 
-def _set_result(raw, claims, blocks, required, references):
+def _set_result(raw, claims, blocks, required, references, *, merge_review_directions=False):
     _nonempty(raw, "assessment", "readiness")
     if any(not step.strip() for step in raw["priorities"]):
         raise ValueError("Пустой шаг в порядке исправлений")
@@ -475,7 +485,7 @@ def _set_result(raw, claims, blocks, required, references):
     trace_errors, trace_paths = _check_traces(raw, by_id, required, checked)
     errors.extend(trace_errors)
     paths.extend(trace_paths)
-    findings = _merge(checked)
+    findings = _merge(checked, merge_review_directions=merge_review_directions)
     if findings and not raw["priorities"]:
         raise ValueError("Для замечаний нужен порядок исправлений")
     linked = {ident for f in findings for ident in f["ids"]}
@@ -573,7 +583,11 @@ def _final_decisions(raw, candidates, claims):
             kept.append(finding)
         if decision["action"] != "оставить":
             for ref in prior["ids"]:
-                notes.setdefault(ref, []).append(decision["reason"])
+                if finding is None or ref in finding["ids"]:
+                    explanation = decision["reason"]
+                else:
+                    explanation = "При сквозной проверке это утверждение исключено из оснований замечания."
+                notes.setdefault(ref, []).append(explanation)
     if seen != originals.keys():
         errors.append("Нет решения по замечаниям " + ", ".join(sorted(originals.keys() - seen)))
         paths.append("/decisions/-")
@@ -647,7 +661,11 @@ def review(document, provider, progress=lambda msg: None):
         return _local_review(provider, batch, document.blocks, progress)
 
     stage("extract")
-    batches = enumerate(_batches(document.blocks), 1)
+    keyed = getattr(provider, "keyed_review", False) is True
+    batches = _batches(document.blocks)
+    if keyed:
+        batches = [batch[i:i + 14] for batch in batches for i in range(0, len(batch), 14)]
+    batches = enumerate(batches, 1)
     if getattr(provider, "extract_workers", 1) == 2:
         with ThreadPoolExecutor(max_workers=2) as executor:
             jobs = [executor.submit(copy_context().run, extract, n, batch) for n, batch in batches]
@@ -664,16 +682,24 @@ def review(document, provider, progress=lambda msg: None):
     required, references = _trace_scope(claims, blocks)
     payload = {"blocks": [_source(b) for b in document.blocks], "claims": index,
                "required_traces": required, "references": references}
-    candidates, resolved, trace_review = _request(
-        provider, SYNTHESIZE, payload, GLOBAL,
-        lambda data: _set_result(data, claims, blocks, required, references), progress)
+    if keyed:
+        from .gemini_review import cross_review
+        candidates, resolved, trace_review = cross_review(provider, payload, claims, blocks, required, references, progress)
+    else:
+        candidates, resolved, trace_review = _request(
+            provider, SYNTHESIZE, payload, GLOBAL,
+            lambda data: _set_result(data, claims, blocks, required, references), progress)
     stage("adjudication")
     progress(f"Независимая проверка оснований и вопросов по всему источнику: замечаний {len(candidates)}.")
     audit_payload = {"blocks": payload["blocks"], "candidates": [_audit_candidate(f) for f in candidates],
                      "trace_review": trace_review,
                      "claims": [{k: c[k] for k in ("id", "block", "summary")} for c in claims]}
-    findings, notes, set_review = _request(provider, ADJUDICATE, audit_payload, AUDIT,
-                                           lambda data: _final_decisions(data, candidates, claims), progress)
+    if keyed:
+        from .gemini_review import audit_review
+        findings, notes, set_review = audit_review(provider, audit_payload, candidates, claims, progress)
+    else:
+        findings, notes, set_review = _request(provider, ADJUDICATE, audit_payload, AUDIT,
+                                               lambda data: _final_decisions(data, candidates, claims), progress)
     stage("validation")
     for claim in claims:
         links = [f for f in findings if claim["id"] in f["ids"]]
@@ -684,6 +710,11 @@ def review(document, provider, progress=lambda msg: None):
         if claim["id"] in notes:
             note = " ".join(dict.fromkeys(notes[claim["id"]]))
             claim["assessment"] = claim["assessment"] + " " + note if claim["id"] in resolved else note
+        if links:
+            active_reasons = list(dict.fromkeys(f['reason'] for f in links))
+            if claim['assessment'] not in active_reasons:
+                active_reasons.append('Дополнительная оценка. ' + claim['assessment'])
+            claim['assessment'] = ' '.join(active_reasons)
         if any(f["counted"] for f in links):
             claim["status"] = "Выявлено нарушение"
         elif any(f["kind"] == "Предполагаемый пробел" for f in links):

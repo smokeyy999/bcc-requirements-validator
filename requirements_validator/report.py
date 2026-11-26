@@ -77,7 +77,7 @@ def render(doc, result, run, source_path, output_path):
     extra_rows = ''
     if run.get('settings'):
         cfg = run['settings']
-        parameters = [f'{name}={cfg[name]}' for name in ('cli_version', 'temperature', 'seed', 'reasoning_effort', 'extract_workers')
+        parameters = [f'{name}={cfg[name]}' for name in ('cli_version', 'temperature', 'seed', 'reasoning_effort', 'analysis_thinking_level', 'extract_workers')
                       if cfg.get(name) is not None]
         if cfg.get('temperature') is None and cfg.get('seed') is None:
             parameters.append('temperature и seed провайдер не сообщает')

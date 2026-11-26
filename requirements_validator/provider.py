@@ -104,6 +104,7 @@ def _quota(body):
 
 class Gemini:
     name = "Gemini API"
+    keyed_review = True
     endpoint = "https://generativelanguage.googleapis.com/v1beta/"
 
     def __init__(self, key, model, rpm=10):
@@ -118,7 +119,9 @@ class Gemini:
     def configuration(self):
         return {"requested_model": self._requested_model, "model_version_reported": self._version,
                 "api": "v1beta.generateContent", "temperature": 0.2, "seed": 42,
-                "requests_per_minute": self.rpm, "extract_workers": 1,
+                "analysis_thinking_level": "HIGH" if self._requested_model == "gemini-3.5-flash-lite" else None,
+                "requests_per_minute": self.rpm, "extract_workers": 1, "max_local_batch_blocks": 14,
+                "coverage_batch_size": 10, "adjudication_batch_size": 6,
                 "tokens_source": "usageMetadata: input=promptTokenCount, output=candidatesTokenCount; thoughts reported separately"}
 
     def _pace(self):
@@ -133,7 +136,7 @@ class Gemini:
         message = request.Request(self.endpoint + path, data=body, headers={
             "Content-Type": "application/json", "x-goog-api-key": self._key,
         })
-        for attempt in range(3):
+        for attempt in range(4):
             delay = 2 ** attempt
             if payload is not None:
                 self._pace()
@@ -166,6 +169,7 @@ class Gemini:
                     issue = "Gemini ответил HTTP 429: достигнут лимит частоты или квоты проекта"
                 elif exc.code in (408, 500, 502, 503, 504):
                     issue = f"Временная ошибка Gemini (HTTP {exc.code})"
+                    delay = (5, 15, 40, 60)[attempt]
                     retry_after = _retry_after(exc.headers.get("Retry-After") if exc.headers else None)
                     if retry_after is not None:
                         delay = retry_after
@@ -174,7 +178,8 @@ class Gemini:
             except (error.URLError, TimeoutError, OSError) as exc:
                 reason = getattr(exc, "reason", exc)
                 issue = "Истёк таймаут Gemini" if isinstance(reason, TimeoutError) else "Нет соединения с Gemini"
-            if attempt == 2 or delay > 60:
+            exhausted = attempt >= 2 if not (record.get("http_status") in (408, 500, 502, 503, 504)) else attempt >= 3
+            if exhausted or delay > 60:
                 raise ProviderError(f"{issue}. Проверьте сеть и лимиты, повторите запуск через {math.ceil(delay)} с или позже.")
             time.sleep(delay)
 
@@ -201,6 +206,8 @@ class Gemini:
     def ask(self, prompt, schema):
         config = {"responseMimeType": "application/json", "responseJsonSchema": schema,
                   "temperature": 0.2, "seed": 42}
+        if schema is not PROBE_SCHEMA and self._requested_model == "gemini-3.5-flash-lite":
+            config["thinkingConfig"] = {"thinkingLevel": "HIGH"}
         for attempt in range(2):
             with purpose("response_retry") if attempt else nullcontext():
                 result = self._request("models/" + self._requested_model + ":generateContent", {

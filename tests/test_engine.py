@@ -247,6 +247,7 @@ class TestReview(unittest.TestCase):
         claim = result["requirements"][0]
         self.assertEqual(claim["findings"], ["Z-001"])
         self.assertIn("Срок отмены прямо указан.", claim["assessment"])
+        self.assertIn(result['findings'][0]['reason'], claim['assessment'])
         self.assertEqual(claim["status"], "Выявлено нарушение")
 
     def test_patch_cannot_overwrite_good_results(self):
