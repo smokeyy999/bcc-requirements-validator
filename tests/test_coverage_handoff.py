@@ -134,6 +134,9 @@ class CoverageHandoffTests(unittest.TestCase):
             verify(rows, [dict(covered, question_quote="чужой вопрос", test_quote="чужой тест"),
                           dict(closed, source_quote="сортируется по номеру", reason="задано")], [public], source, raw)
         message = str(caught.exception)
+        for path in ("/dispositions/0/question_quote", "/dispositions/0/test_quote",
+                     "/dispositions/1/source_quote", "/dispositions/1/reason"):
+            self.assertIn(path, caught.exception.paths)
         for field in ("(key=language).question_quote:", "(key=language).test_quote:",
                       "(key=order).source_quote:", "(key=order).reason:"):
             self.assertIn(field, message)

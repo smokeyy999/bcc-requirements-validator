@@ -131,7 +131,8 @@ def supplement(provider, claims, blocks, candidates, references, instructions, p
     stage("coverage_review")
     progress("Независимая сверка решений между разделами и проверенными кандидатами.")
     return e._request(CoverageProvider(), _COVERAGE + instructions, payload, schema,
-                      lambda raw: _reconcile(raw, axes, candidates, claims, blocks, references), progress)
+                      lambda raw: _reconcile(raw, axes, candidates, claims, blocks, references), progress,
+                      max_repairs=3)
 
 
 def _check_ids(e, raw, rows, by_id, existing, blocks):

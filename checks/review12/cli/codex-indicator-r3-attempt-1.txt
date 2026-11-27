@@ -1,0 +1,12 @@
+2026-11-27T11:33:49+05:00
+> python -m requirements_validator --input benchmark/indicator/requirements.md --output reports/review12/benchmark-runs/indicator/r3/report.md
+Документ «Индикатор выключателя» · исходных блоков 4 · SHA-256 8117b8fb6907ce1af2f4ae4a3d0f16d4abf9ef46010edfc2a217c31931a3a7a2
+Версия 2c34dc04851048be907ec934841c1a6f001bccb2 · рабочая копия чистая
+Доступ подтверждён · OpenAI через Codex CLI · gpt-6.2-sol
+Выделение и оценка утверждений: пакет 1, блоков 4.
+Сквозная проверка всего документа: утверждений 7.
+Независимая проверка оснований и вопросов по всему источнику: замечаний 0.
+Отчёт сохранён в ./reports/review12/benchmark-runs/indicator/r3/report.md
+Метрики сохранены в ./reports/review12/benchmark-runs/indicator/r3/report/run-meta.json
+Готово за 83.8 с, включая запись · запросов модели 4 (повторных 0) · токены входа 59573, выхода 1334 · утверждений 7 · нарушений 0 · вопросов 0
+Exit 0, 84.0 s

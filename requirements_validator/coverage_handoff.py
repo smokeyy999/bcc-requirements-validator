@@ -154,18 +154,29 @@ def verify(handoffs, dispositions, refreshed_groups, source_quotes, raw_final):
     decisions = {d["id"]: d for d in raw_final["decisions"]}
     groups = _groups(refreshed_groups, decisions)
     seen = set()
-    errors = []
+    errors, paths = [], []
     for index, item in enumerate(dispositions):
         key = item["key"]
         path = f"dispositions[{index}] (key={key})"
         if key in seen:
             errors.append(f"{path}.key: повторная строка")
+            paths.append(f"/dispositions/{index}")
         seen.add(key)
         if key not in expected:
             errors.append(f"{path}.key: этот ключ не передан на сверку")
+            paths.append(f"/dispositions/{index}")
         else:
-            errors.extend(f"{path}.{message}"
-                          for message in _receipt_errors(expected[key], item, decisions, groups, source_quotes))
-    errors.extend(f"dispositions (key={key}).key: нужна строка для этого решения" for key in expected if key not in seen)
+            for message in _receipt_errors(expected[key], item, decisions, groups, source_quotes):
+                errors.append(f"{path}.{message}")
+                fields = message.split(":", 1)[0].split("/")
+                paths.extend(f"/dispositions/{index}/{field}" for field in fields)
+                if set(fields) & {"owner", "source_id", "source_quote", "reason"}:
+                    paths.append(f"/dispositions/{index}")
+                    if expected[key]["finding_id"] not in groups:
+                        paths.extend(["/reopened/-", "/summary/-"])
+    for key in expected.keys() - seen:
+        errors.append(f"dispositions (key={key}).key: нужна строка для этого решения")
+        paths.append("/dispositions/-")
     if errors:
-        raise ValueError("\n".join(errors))
+        from .engine import DraftError
+        raise DraftError("\n".join(errors), paths)

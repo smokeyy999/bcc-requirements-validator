@@ -41,9 +41,19 @@ _OTHER_ERRORS = re.compile(r"\b(?:проч\w*|друг\w*|остальн\w*|ин
 _EXCEPT = re.compile(r"\b(?:кроме|помимо|за исключением|except(?:\s+for)?|other than|excluding)\s+"
                      r"(?:(?:случа\w*|ошиб\w*|ветв\w*)\s+)?([^,?;.!]+)", re.I)
 _SUCCESS = re.compile(r"\b(?:при\s+успехе|(?:при|после)\s+успешн\w*|успешн\w*\s+(?:ответ|ветв|исход|сохран)"
-                      r"|(?:on|after)\s+success|successful\s+(?:response|result|operation)|HTTP\s+2(?:[0-9]{2}|xx))", re.I)
+                      r"|(?:завершить|выполнить)\s+(?:[\w-]+\s+){0,2}успешно\b|"
+                      r"(?:on|after)\s+success|successful\s+(?:response|result|operation)|HTTP\s+2(?:[0-9]{2}|xx))", re.I)
 _FORMAL_FIELD = re.compile(r"\b(?:пол(?:е|я|ю|ем|ей|ях)|атрибут\w*|параметр\w*|field|attribute|parameter)"
                            r"\s+(?:[«\"\x60]([\w.-]+)[»\"\x60]|([A-Za-z_][A-Za-z0-9_.-]*))", re.I)
+_NEXT_FIELD = re.compile(r"\s*(?:,\s*(?:(?:и|and)\s+)?|\s+(?:и|and)\s+)"
+                         r"(?:[«\"\x60]([\w.-]+)[»\"\x60]|([A-Za-z_][A-Za-z0-9_.-]*))", re.I)
+_FIELD_SUBJECT = re.compile(r"\b(?:пол[еяю]|полей|поля[хм]|параметр\w*|атрибут\w*|признак\w*|"
+                            r"fields?|attributes?|parameters?)\b", re.I)
+_APPLIES = re.compile(r"\b(?:обязател\w*|допустим\w*|присутств\w*|отсутств\w*|гарантир\w*|"
+                      r"включ\w*|в\s+каких|при\s+каких|для\s+каких|долж\w*|нуж\w*|"
+                      r"required|optional|absent|present|include\w*|which)\b", re.I)
+_NO_INPUT = re.compile(r"\b(?:без|отсутстви[ея]|нет|without|missing)\s+([\w-]+)", re.I)
+_BRANCH_NAMES = {"success": "успешный исход", "other": "отдельно описанные отказы"}
 _FAIL_CODE = re.compile(r"(?<!\w)[45]\d\d(?!\w)")
 _EXERCISE = re.compile(r"\b(?:проверить|вызвать|воспроизвести|смоделировать|отправить|подать|"
                        r"повторить|test|trigger|simulate|submit|exercise)\s+", re.I)
@@ -129,23 +139,70 @@ def _distinct_branch(question, conditions, source):
 
 
 def _contract_fields(question, source):
-    fields = [match[1] or match[2] for match in _FORMAL_FIELD.finditer(question)]
+    fields = []
+    for match in _FORMAL_FIELD.finditer(question):
+        fields.append(match[1] or match[2])
+        end = match.end()
+        while adjacent := _NEXT_FIELD.match(question, end):
+            fields.append(adjacent[1] or adjacent[2])
+            end = adjacent.end()
     return [name for name in dict.fromkeys(fields) if re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", source)]
 
 
-def _only_promised_test(test, conditions, source):
-    if not _targets_promised_case(test, conditions) or _distinct_branch(test, conditions, source):
-        return False
-    # A control for the known branch may follow an independent failing input.
-    # Reading the same response again does not introduce a second experiment.
+def _separate_input(test, conditions, described):
+    # Reading an earlier response is not a distinct input. A directly exercised
+    # missing input can be named without using the word "error".
+    terms = _terms(described)
     for clause in re.split(r"[.;!?\n,]+", test):
-        if not _FAILURE.search(clause) or _targets_promised_case(clause, conditions):
+        if _targets_promised_case(clause, conditions):
             continue
         for action in _EXERCISE.finditer(clause):
             target = clause[action.end():].strip()
-            if _FAILURE.search(target) and _terms(target) and not _OBSERVATION.match(target):
-                return False
-    return True
+            if _OBSERVATION.match(target):
+                continue
+            if (_FAILURE.search(target) and _terms(target) or
+                    any(_terms(m[1]) & terms for m in _NO_INPUT.finditer(target))):
+                return True
+    return False
+
+
+def _only_promised_test(test, conditions, source):
+    return (_targets_promised_case(test, conditions) and not _distinct_branch(test, conditions, source)
+            and not _separate_input(test, conditions, source))
+
+
+def _anchored_source(candidate, source_quotes, extra=()):
+    evidence = [ev for ev in candidate.get("evidence", []) if ev["id"] in source_quotes]
+    ids = list(dict.fromkeys([*candidate.get("ids", ()), *(ev["id"] for ev in evidence), *extra]))
+    quotes = dict.fromkeys([*(source_quotes[i] for i in ids if i in source_quotes), *(ev["quote"] for ev in evidence)])
+    return [i for i in ids if i in source_quotes], list(quotes)
+
+
+def branch_anchors(candidates, claims):
+    """Select source-backed, branch-specific field questions before adjudication."""
+    source_quotes = {c["id"]: c["quote"] for c in claims}
+    anchors = []
+    for candidate in candidates:
+        question = candidate.get("question", "")
+        if not question:
+            continue
+        ids, quotes = _anchored_source(candidate, source_quotes)
+        source = "\n".join(quotes)
+        fields = _contract_fields(question, source)
+        if not fields:
+            continue
+        conditions = _branches([q for q in quotes if _promises_previous(q)])
+        branch = _distinct_branch(question, conditions, source)
+        # Some candidates cite the contract of another failure but omit the
+        # rule for the control case. Their own citations still identify the
+        # separate field obligation; do not borrow an unrelated source rule.
+        if (not branch and not conditions and (_OTHER_ERRORS.search(question) or _EXCEPT.search(question))
+                and (_FAILURE.search(source) or _FAIL_CODE.search(source))):
+            branch = "other"
+        if branch:
+            anchors.append(dict(id=candidate["id"], branch=_BRANCH_NAMES[branch], fields=fields,
+                                question=question, test=candidate["test"], source_ids=ids))
+    return anchors
 
 
 def _promises_previous(quote):
@@ -173,13 +230,50 @@ def _names_previous_field(quote):
     return False
 
 
+def _branch_issue(branch, current, fields, original, finding, conditions, source):
+    question, test = finding["question"], finding["test"]
+    prior_test = original.get("test", "")
+    names = {name: re.compile(r"(?<!\w)" + re.escape(name) + r"(?!\w)") for name in fields}
+    # A reference such as «этот параметр» can identify the field through the
+    # dependent test. An explicitly different field cannot stand in for it.
+    refers = (bool(_FIELD_SUBJECT.search(question)) and not _contract_fields(question, source)
+              and not any(pattern.search(question) for pattern in names.values()))
+    absent = [name for name, pattern in names.items()
+              if not pattern.search(question) and not (refers and pattern.search(test))]
+    test_branch = _distinct_branch(test, conditions, source)
+    exercised = test_branch == branch
+    if branch == "other" and not test_branch:
+        exercised = _separate_input(test, conditions, source + "\n" + prior_test)
+    # A paraphrase can leave the individual inputs to the test. Preserve the
+    # object of the question: an explicit different branch or a question about
+    # encoding prior values is a change of decision even if the test is intact.
+    same_branch = (current == branch or
+                   not current and exercised and not _targets_promised_case(question, conditions)
+                   and bool(_APPLIES.search(question)))
+    errors = []
+    if not same_branch:
+        errors.append(f"В редакции не установлена исходная ветвь «{_BRANCH_NAMES[branch]}»")
+    if absent:
+        errors.append("Отсутствует исходное поле " + ", ".join(absent))
+    control_only = (test != prior_test and not exercised and _only_promised_test(test, conditions, source))
+    if control_only:
+        errors.append("Тест воспроизводит только контрольный отказ с возвратом прежних данных")
+    if not errors:
+        return ""
+    detail = ". ".join(errors)
+    original_test = f" Исходный тест — «{prior_test}»." if prior_test and (control_only or not same_branch) else ""
+    return (f"{detail}. Исходная ветвь — {_BRANCH_NAMES[branch]}, поля — {', '.join(fields)}. "
+            f"Исходный вопрос — «{original['question']}».{original_test} Если пара соответствует источнику, "
+            "сохрани её без перефразирования. При замене спроси о том же поле на тех же входах и "
+            "проверь его в ответе на самостоятельный запрос этой ветви.")
+
+
 def representation_error(finding, original, source_quotes):
     if not finding or not finding.get("question"):
         return ""
     question = finding["question"]
     proof = finding.get("question_basis", {})
-    ids = set(finding["ids"]) | set(original["ids"]) | set(proof.get("checked_ids", []))
-    quotes = [source_quotes[ident] for ident in ids if ident in source_quotes]
+    _, quotes = _anchored_source(original, source_quotes, [*finding["ids"], *proof.get("checked_ids", [])])
     promises = [quote for quote in quotes if _promises_previous(quote)]
     if not promises:
         return ""
@@ -190,13 +284,7 @@ def representation_error(finding, original, source_quotes):
     current_branch = _distinct_branch(question, conditions, source)
     fields = _contract_fields(original_question, source) if original_branch else []
     if fields:
-        names = [re.compile(r"(?<!\w)" + re.escape(name) + r"(?!\w)") for name in fields]
-        changed_test = finding["test"] != original.get("test")
-        if (original_branch != current_branch or not all(name.search(question) for name in names)
-                or changed_test and _only_promised_test(finding["test"], conditions, source)):
-            return (f"Исходный вопрос о применимости поля {', '.join(fields)} относится к отдельно указанной "
-                    "ветви ответа. Сохрани в вопросе и тесте именно это условие и поле. Другая ветвь с "
-                    "обязательным возвратом прежнего состояния не определяет контракт этой ветви.")
+        return _branch_issue(original_branch, current_branch, fields, original, finding, conditions, source)
     if current_branch or not (_PRIOR.search(question) and (_ASK_RETURN.search(question) or _BODY.search(question))):
         return ""
     # A rule explicitly excluding those values from the error payload is an
@@ -226,6 +314,11 @@ def representation_error(finding, original, source_quotes):
 
 REPRESENTATION_INSTRUCTION = """
 Для returned_state_on_error сверяй отдельно исход операции и его представление для получателя.
+Если переданы response_branch_anchors, это первоначальные вопросы и тесты кандидатов с полями
+и условиями из данного документа. Проверь их по source_ids. Когда исходная пара уже годится,
+сохрани её. Если нужен уточняющий вопрос, режим замены допускает дословный текст применимой пары.
+При перефразировании сравни начальный и новый тест: участник, вход, ветвь ответа и проверяемое
+поле должны по-прежнему отвечать на то же открытое решение.
 Сопоставляй условие именно того отказа, для которого написано правило, с открытым решением
 кандидата. Упоминание этой нормы в checked или в известной части теста не переносит её на успех
 и остальные ошибки. Для вопроса об обязательности конкретного поля в других описанных ветвях

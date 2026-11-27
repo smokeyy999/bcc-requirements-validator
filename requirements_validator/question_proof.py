@@ -60,10 +60,20 @@ def apply_revisions(edits, raw, findings, check, *, reopen=(), allowed_reopen=()
         decision.update(question_mode="заменить", question=edit["question"], test=edit["test"])
     try:
         result = check(revised)
-        if after:
-            after(revised, result)
-        return result
     except ValueError as error:
-        # Индексы в сообщении валидатора относятся к полному набору решений, а правки
-        # данной фазы адресуются по ID. Не передаём чужие пути в протокол PATCH.
-        raise ValueError(f"Правки принятых вопросов нарушили основания исходных решений: {error}") from error
+        from .engine import DraftError
+        paths = []
+        positions = {edit["id"]: f"/{kind}/{i}" for kind, rows in (("edits", edits), ("reopened", reopen))
+                     for i, edit in enumerate(rows)}
+        for issue in getattr(error, "paths", ()):
+            pieces = issue.split("/")
+            if len(pieces) >= 3 and pieces[1] == "decisions" and pieces[2].isdigit():
+                ident = revised["decisions"][int(pieces[2])]["id"]
+                if ident in positions:
+                    paths.append(positions[ident])
+            elif len(pieces) >= 2 and pieces[1] in {"assessment", "readiness", "priorities"} and summaries:
+                paths.append("/summary/0/" + pieces[1])
+        raise DraftError(f"Правки принятых вопросов нарушили основания исходных решений: {error}", paths) from error
+    if after:
+        after(revised, result)
+    return result

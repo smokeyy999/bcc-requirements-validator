@@ -32,6 +32,15 @@ class QuestionProofTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Неподтверждённая"):
             apply_revisions([self.edit], self.raw, self.accepted, reject)
 
+    def test_local_edit_positions_are_not_full_adjudication_positions(self):
+        from requirements_validator.engine import DraftError
+        raw = {"decisions": [dict(id="Z-001"), *self.raw["decisions"]]}
+        def reject(data):
+            raise DraftError("Недоказанный исход.", ["/decisions/1/question", "/priorities"])
+        with self.assertRaises(DraftError) as caught:
+            apply_revisions([self.edit], raw, self.accepted, reject)
+        self.assertEqual(caught.exception.paths, ["/edits/0"])
+
     def test_reopening_requires_an_existing_decision_under_review_and_a_new_summary(self):
         previous = {"decisions": [{"id": "Z-002", "action": "снять", "question_mode": "убрать",
                                    "question_check": [], "same_decision_as": ""}]}

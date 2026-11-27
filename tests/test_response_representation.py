@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from requirements_validator.response_representation import representation_error, response_obligations
+from requirements_validator.response_representation import branch_anchors, representation_error, response_obligations
 
 
 RULE = "При отклонении редакции вернуть прежний профиль и результат ERROR."
@@ -120,3 +120,47 @@ class ReturnedStateTests(unittest.TestCase):
         invented = dict(ids=list(source), question="При прочих отказах всегда передавать поле madeUp?",
                         test="Проверить ответ без доступа.")
         self.assertEqual(representation_error(dict(invented, question=QUESTION, test=TEST), invented, source), "")
+
+    def test_audit_anchors_use_only_this_candidate_and_include_coordinated_fields(self):
+        claims = [dict(id="a", quote=RULE), dict(id="b", quote="Поля traceCode и retryFlag имеют тип string."),
+                  dict(id="c", quote="При отказе в доступе выдать ошибку."), dict(id="unrelated", quote="Поле unused.")]
+        source = {c["id"]: c["quote"] for c in claims}
+        original = dict(id="Z-4", question="При прочих отказах обязательны ли поля traceCode и retryFlag?",
+                        test="Вызвать отказ в доступе и проверить оба поля.",
+                        evidence=[dict(id=k, quote=source[k]) for k in ("a", "b", "c")])
+        known = dict(original, id="Z-5", question="В какой структуре API возвращает прежние значения при отклонении редакции?")
+        anchors = branch_anchors([original, known], claims)
+        self.assertEqual(anchors, [dict(id="Z-4", branch="отдельно описанные отказы", fields=["traceCode", "retryFlag"],
+                                        question=original["question"], test=original["test"], source_ids=["a", "b", "c"])])
+        no_control = dict(original, evidence=original["evidence"][1:])
+        self.assertEqual(branch_anchors([no_control], claims)[0]["source_ids"], ["b", "c"])
+        self.assertFalse(branch_anchors([dict(original, question="В каких отказах обязательно поле unused?")], claims))
+
+    def test_readable_paraphrase_can_name_the_field_and_scenario_in_dependent_test(self):
+        source = {"a": RULE, "b": "Поле dayTag имеет тип string.", "c": "При отказе в доступе выдать ошибку."}
+        original = dict(ids=list(source), question="В каких прочих отказах обязательно поле dayTag?",
+                        test="Вызвать отказ в доступе и проверить dayTag в ответе.")
+        for question in ("Должен ли ответ в этом опыте включать dayTag?", "Обязателен ли при таком запросе этот атрибут?"):
+            with self.subTest(question=question):
+                changed = dict(original, question=question, test="Вызвать отказ в доступе и считать dayTag из ответа.")
+                self.assertEqual(representation_error(changed, original, source), "")
+        confirmed = dict(original, question="При успехе обязательно ли поле dayTag?")
+        success_source = dict(source, c="При успехе выдаётся запись.")
+        retained = dict(confirmed, question="Обязателен ли указанный параметр в этом опыте?",
+                        test="Завершить операцию успешно и проверить dayTag.")
+        self.assertEqual(representation_error(retained, confirmed, success_source), "")
+
+    def test_diagnostics_explain_lost_field_scenario_and_control_only_test(self):
+        source = {"a": RULE, "b": "Поле auditKey и поле note имеют тип string.",
+                  "c": "При отказе в доступе выдать ошибку."}
+        prior = dict(ids=list(source), question="При прочих отказах обязательно ли поле auditKey?",
+                     test="Вызвать отказ в доступе и проверить auditKey.")
+        control = "Отклонить редакцию и считать прежний профиль из ответа."
+        wrong_field = representation_error(dict(prior, question="При прочих отказах обязательно ли поле note?"), prior, source)
+        self.assertIn("Отсутствует исходное поле auditKey", wrong_field)
+        self.assertIn(prior["question"], wrong_field)
+        wrong_test = representation_error(dict(prior, test=control), prior, source)
+        self.assertIn("только контрольный отказ", wrong_test)
+        self.assertIn(prior["test"], wrong_test)
+        wrong_subject = dict(prior, question="Как кодировать прежний профиль в поле auditKey при отклонении редакции?")
+        self.assertIn("не установлена исходная ветвь", representation_error(wrong_subject, prior, source))
