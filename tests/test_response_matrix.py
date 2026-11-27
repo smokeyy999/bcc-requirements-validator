@@ -15,6 +15,14 @@ def block(identifier, kind, section, text):
 
 
 class ResponseMatrixTests(unittest.TestCase):
+    def test_full_document_coverage_accepts_an_ordered_mapping_view_and_a_single_pass_iterator(self):
+        blocks = read_document(ROOT / "docs/requirements.md").blocks
+        expected = response_matrix(blocks)
+        self.assertTrue(expected["contracts"][0]["examples"])
+        indexed = {block.id: block for block in blocks}
+        self.assertEqual(response_matrix(indexed.values()), expected)
+        self.assertEqual(response_matrix(iter(blocks)), expected)
+
     def test_three_real_inputs_preserve_conditions_and_all_source_branches(self):
         for path in ("docs/requirements.md", "checks/pdf/requirements-copy.pdf", "checks/docx/requirements-copy.docx"):
             with self.subTest(path=path):

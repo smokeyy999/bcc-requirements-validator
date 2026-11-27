@@ -78,6 +78,7 @@ def _json_keys(text):
 
 def response_matrix(blocks):
     """Group response declarations and examples by endpoint, retaining source block IDs."""
+    blocks = list(blocks)
     contracts = {}
     samples = []
     for index, block in enumerate(blocks):
