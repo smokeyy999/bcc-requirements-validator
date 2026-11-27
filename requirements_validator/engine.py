@@ -14,6 +14,7 @@ from .data_boundary import BOUNDARY_INSTRUCTION, data_boundary_error, storage_un
 from .example_scope import EXAMPLE_SCOPE_INSTRUCTION, input_scope_error, unbound_response_examples
 from .metrics import purpose, stage
 from .prompts import ADJUDICATE, CAPACITY_INSTRUCTION, EXTRACT, SYNTHESIZE
+from .question_focus import question_focus_error
 from .question_language import QUESTION_LANGUAGE_INSTRUCTION, question_language_error
 from .coverage_review import supplement
 from .question_scope import (
@@ -299,7 +300,7 @@ def _nonempty(record, *names):
 
 def _source(block):
     return {"id": block.id, "section": block.section, "source_id": block.source_id,
-            "text": block.text}
+            "kind": getattr(block, "kind", "text"), "text": block.text}
 
 
 def _batches(blocks):
@@ -929,7 +930,8 @@ def _final_decisions(raw, candidates, claims, signals=(), verified_refs=(), capa
                 raise DraftError(issue, ["/action", "/case_check", "/question_mode", "/question", "/test", "/question_check"])
             if issue := scope_error(finding, prior, source_quotes):
                 raise DraftError(issue, ["/action", "/question_mode", "/question", "/test", "/question_check"])
-            issue = (refund_scope_error(finding, prior, source_quotes)
+            issue = (question_focus_error(finding, source_quotes)
+                     or refund_scope_error(finding, prior, source_quotes)
                      or representation_error(finding, prior, source_quotes)
                      or (data_boundary_error(finding, stored_units) if finding else "")
                      or (observation_scope.scope_error(finding, measurement_scopes) if finding else ""))
@@ -1174,6 +1176,8 @@ def review(document, provider, progress=lambda msg: None):
         claims.extend(rows)
         context.extend(ignored)
     verified_refs = reference_findings(missing_references(document.blocks), claims, blocks, context)
+    if not claims and all(getattr(b, "kind", None) == "heading" for b in document.blocks):
+        raise ValueError("В документе только заголовки разделов без проверяемых требований.")
     stage("cross_review")
     progress(f"Сквозная проверка всего документа: утверждений {len(claims)}.")
     index = [{k: c[k] for k in ("id", "block", "quote", "summary", "assessment", "status")} for c in claims]

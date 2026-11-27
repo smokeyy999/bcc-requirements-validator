@@ -27,7 +27,8 @@ class Document:
     blocks: tuple[Block, ...]
 
 
-_HEADING = re.compile(r"^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
+_HEADING = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$")
+_SETEXT = re.compile(r" {0,3}(=+|-+)[ \t]*")
 _FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _ITEM = re.compile(r"^\s*(?:[-+*]\s+|\d+(?:\.\d+)*[.)]\s+)")
 _EXPLICIT_ID = re.compile(
@@ -70,7 +71,8 @@ def _index_page(text, page, headings, blocks, styled_headings=None):
     def heading_at(raw):
         marked = _HEADING.match(raw)
         if marked:
-            return len(marked[1]), marked[2]
+            name = re.sub(r"(?:^|[ \t]+)#+$", "", marked[2] or "").strip()
+            return len(marked[1]), name
         return styled_headings.get(raw.strip())
 
     def layout_cells(raw):
@@ -92,6 +94,17 @@ def _index_page(text, page, headings, blocks, styled_headings=None):
         blocks.append(Block(anchor, quote, section, explicit_id, loc,
                             kind, page, first, last))
 
+    def emit_heading(depth, name, start, end):
+        nonlocal title, table_header
+        table_header = None
+        while headings and headings[-1][0] >= depth:
+            headings.pop()
+        if name:
+            headings.append((depth, name))
+            if depth == 1 and title is None:
+                title = name
+            emit(start, end, "heading", _source_id(name))
+
     while i < len(lines):
         raw = content[i]
         stripped = raw.strip()
@@ -101,13 +114,7 @@ def _index_page(text, page, headings, blocks, styled_headings=None):
             continue
         heading = heading_at(raw)
         if heading:
-            depth, name = heading
-            while headings and headings[-1][0] >= depth:
-                headings.pop()
-            headings.append((depth, name))
-            if depth == 1 and title is None:
-                title = name
-            table_header = None
+            emit_heading(*heading, i, i + 1)
             i += 1
             continue
         fence = _FENCE.match(raw)
@@ -145,9 +152,13 @@ def _index_page(text, page, headings, blocks, styled_headings=None):
             continue
         table_header = None
         explicit_id = _source_id(raw)
+        item = _ITEM.match(raw)
         end = i + 1
+        underline = None
         while end < len(lines):
             nxt = content[end]
+            if page is None and not item and (underline := _SETEXT.fullmatch(nxt)):
+                break
             if (not nxt.strip() or heading_at(nxt) or _FENCE.match(nxt)
                     or _ITEM.match(nxt) or _source_id(nxt) or _rule(nxt)
                     or nxt.strip().startswith("|")
@@ -155,8 +166,14 @@ def _index_page(text, page, headings, blocks, styled_headings=None):
                     or ("|" in nxt and end + 1 < len(lines) and _table_separator(content[end + 1]))):
                 break
             end += 1
-        emit(i, end, "item" if _ITEM.match(raw) else "text", explicit_id)
-        i = end
+        if underline:
+            name = " ".join(line.strip() for line in content[i:end])
+            depth = 1 if underline[1].startswith("=") else 2
+            emit_heading(depth, name, i, end)
+            i = end + 1
+        else:
+            emit(i, end, "item" if item else "text", explicit_id)
+            i = end
     return title
 
 

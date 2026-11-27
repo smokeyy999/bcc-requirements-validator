@@ -68,10 +68,11 @@ class ExampleInputTests(unittest.TestCase):
             source = Path(directory, "spec.md")
             source.write_text("# Протокол\n\n## 202. Accepted\n\n```json\n" + self.response + "\n```\n", encoding="utf8")
             blocks = read_document(source).blocks
-        self.assertEqual(unbound_response_examples(blocks), {blocks[0].id: "202"})
-        previous = SimpleNamespace(id="generic", text="Возможный ответ.", section=blocks[0].section)
-        self.assertEqual(unbound_response_examples([previous, *blocks]), {blocks[0].id: "202"})
-        following = block("linked", blocks[0].section, "Этот ответ воспроизводит запрос POST /reserve?desk=R.")
+        output, = (b for b in blocks if b.kind == "code")
+        self.assertEqual(unbound_response_examples(blocks), {output.id: "202"})
+        previous = SimpleNamespace(id="generic", text="Возможный ответ.", section=output.section)
+        self.assertEqual(unbound_response_examples([previous, *blocks]), {output.id: "202"})
+        following = block("linked", output.section, "Этот ответ воспроизводит запрос POST /reserve?desk=R.")
         self.assertEqual(unbound_response_examples([*blocks, following]), {})
 
     def test_status_heading_edit_and_an_unconditional_output_rule_are_separate(self):

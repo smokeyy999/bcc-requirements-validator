@@ -35,6 +35,18 @@ def make_report(path, case, trial, rows=()):
 
 
 class BenchmarkTests(unittest.TestCase):
+    def test_multiline_evidence_matches_legacy_and_github_line_anchors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.md"
+            source.write_bytes(b"First line\nSecond line\n")
+            case = ev.Case("sample", "test", source, (), hashlib.sha256(source.read_bytes()).hexdigest(), 2)
+            report = make_report(root / "report.md", case, 1, [finding("Z-001", [1])])
+            template = report.read_text(encoding="utf-8").replace("[строка 1]", "[строки 1–2]")
+            for anchor in ("#L1", "?plain=1#L1-L2"):
+                report.write_text(template.replace("source.md#L1", "source.md" + anchor), encoding="utf-8")
+                self.assertEqual({1, 2}, ev.parse_report(report, case).findings[0].lines)
+
     def test_matrices_frozen_separate_and_all_seeds_are_actual_mutations(self):
         cases = ev.load_cases(ev.ROOT / "benchmark", "all")
         self.assertEqual(7, len(cases))

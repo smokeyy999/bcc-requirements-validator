@@ -47,7 +47,9 @@ def missing_references(blocks):
             declared.add(_key(name))
         # A heading may be the target. PDF layout tables can retain their visible
         # ID column without a source_id; a standalone cell is a possible definition.
-        possible.update(_key(m[0]) for m in _ID.finditer(block.section))
+        # A rule written in a heading can itself refer to another rule.
+        # That reference is not a declaration, even when inherited as section context.
+        possible.update(_key(m[0]) for m in _ID.finditer(_USE.sub('', block.section)))
         possible.update(_key(m[1]) for m in _HTML_ID.finditer(block.text))
         if getattr(block, 'kind', None) == 'table':
             for cell in re.split(r'\||\t|\s{2,}', block.text):

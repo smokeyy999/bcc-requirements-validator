@@ -46,7 +46,7 @@ class NamedReferenceTest(unittest.TestCase):
         claims = []
         context = [{'block': b.id, 'role': 'контекст'} for b in source]
         found = reference_findings(references, claims, {b.id: b for b in source}, context)
-        self.assertEqual(context, [])
+        self.assertEqual(context, [{"block": "M0001", "role": "контекст"}])
         first, second = found
         self.assertEqual([e['location'] for e in first['evidence']], ['строка 2', 'строка 3'])
         self.assertEqual([e['quote'] for e in first['evidence']], ['по правилу КБ-23', 'См. требование КБ‑23'])
@@ -71,12 +71,14 @@ class NamedReferenceTest(unittest.TestCase):
         self.assertTrue(has_independent_basis(finding, [ref], {'r': obligation}))
 
     def test_full_review_keeps_editorial_defect_and_independent_business_question(self):
-        source = blocks(['# Насос', 'Н-1. Показать объём по правилу Н-17. После сбоя насос переходит в аварийное состояние.',
+        source = blocks(['# Насос', '## Н-1. Показать объём по правилу Н-17. После сбоя насос переходит в аварийное состояние.',
                          'Н-2. На дисплее указывается объём в литрах.'])
-        label, fault, display = 'Показать объём по правилу Н-17.', 'После сбоя насос переходит в аварийное состояние.', source[1].text
+        title, rule, description = source
+        label, fault, display = 'Показать объём по правилу Н-17.', 'После сбоя насос переходит в аварийное состояние.', description.text
         local = dict(claims=[dict(block=b.id, quote=q, summary=q, assessment='Проверить условие.',
                                   status='проверяемо', trace='локально')
-                             for b, q in ((source[0], label), (source[0], fault), (source[1], display))], context=[])
+                             for b, q in ((rule, label), (rule, fault), (description, display))],
+                     context=[dict(block=title.id, role='контекст')])
         anchor = 'R-M0002-02'
         question = 'В какое состояние должен перейти насос после сбоя?'
         gap = dict(topic='Состояние после сбоя', kind='Предполагаемый пробел', category='Полнота',

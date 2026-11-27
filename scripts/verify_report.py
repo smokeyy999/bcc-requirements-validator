@@ -6,6 +6,22 @@ from pathlib import Path
 from urllib.parse import unquote
 
 
+def markdown_location(line):
+    address = re.search(
+        r'\[строк[аи] (\d+)(?:–(\d+))?\]\(([^?#)\n]+)(\?plain=1)?#L(\d+)(?:-L(\d+))?\)$',
+        line,
+    )
+    if not address:
+        raise ValueError(f"Некорректная ссылка на строки Markdown: {line}")
+    first, last, path, plain_view, anchor_first, anchor_last = address.groups()
+    start = int(first)
+    end = int(last or first)
+    # Historical reports link to the first line of a labelled range.
+    wrong_end = (plain_view or anchor_last) and int(anchor_last or anchor_first) != end
+    if not 1 <= start <= end or int(anchor_first) != start or wrong_end:
+        raise ValueError(f"Диапазоны в подписи и адресе Markdown расходятся: {line}")
+    return path, start, end
+
 
 def verify(report_path, doc_path):
     if not __debug__:
@@ -68,8 +84,11 @@ def verify(report_path, doc_path):
         link = saved[i-2]
         if doc_path.suffix.lower() == ".docx":
             quoted_path = re.findall(r'\[DOCX, [^]]+\]\(([^)#]+)\)', link)
+        elif doc_path.suffix.lower() == ".pdf":
+            quoted_path = re.findall(r'\]\(([^)#]+)#page=\d+\)', link)
         else:
-            quoted_path = re.findall(r'\]\(([^)#]+)#(?:page=|L)\d+\)', link)
+            path, first, end = markdown_location(link)
+            quoted_path = [path]
         assert len(quoted_path) == 1 and (report_path.parent / unquote(quoted_path[0])).resolve() == doc_path.resolve(), link
         if doc_path.suffix.lower() == ".docx":
             paragraph = re.search(r'\[DOCX, абзац (\d+)\]', link)
@@ -88,9 +107,8 @@ def verify(report_path, doc_path):
             line_index, end = int(address[2])-1, int(address[3] or address[2])
         else:
             page = pages[0]
-            line_index = int(re.search(r"#L(\d+)\)", link)[1]) - 1
-            span = re.search(r'\[строки (\d+)–(\d+)\]', link)
-            end = int(span[2]) if span else line_index + 1
+            assert end <= len(page), link
+            line_index = first - 1
         quote = []
         while i < len(saved) and saved[i].startswith("> "):
             quote.append(saved[i][2:].removesuffix("  "))

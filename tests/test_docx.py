@@ -47,7 +47,8 @@ class WordSourceTests(unittest.TestCase):
         result = self.write(body, style)
         self.assertEqual(result.title, "Архив")
         self.assertEqual(result.sha256, hashlib.sha256(self.path.read_bytes()).hexdigest())
-        first, table, last = result.blocks
+        title_block, section_block, first, table, last = result.blocks
+        self.assertEqual((title_block.kind, section_block.kind), ("heading", "heading"))
         self.assertEqual((first.id, first.location, first.source_id, first.text),
                          ("D0003", "DOCX, абзац 3", "А-2", "А-2. Выдать том."))
         self.assertEqual(table.section, "Архив / Выдача / Столбцы: Код требования · Срок")
@@ -55,6 +56,14 @@ class WordSourceTests(unittest.TestCase):
                          ("T001R0002", "DOCX, таблица 1, строка 2", "A-4", "A-4\t48 часов"))
         self.assertEqual(last.id, "D0004")
         self.assertEqual(result.blocks, read_document(self.path).blocks)
+
+    def test_rules_written_in_consecutive_word_headings_remain_citable(self):
+        properties = '<w:pPr><w:pStyle w:val="Heading2"/></w:pPr>'
+        first, second = self.write(p("R-1. Закрыть клапан", properties)
+                                   + p("Питание только от аккумулятора", properties)).blocks
+        self.assertEqual((first.id, first.source_id, first.text), ("D0001", "R-1", "R-1. Закрыть клапан"))
+        self.assertEqual((second.id, second.kind, second.location, second.source_id),
+                         ("D0002", "heading", "DOCX, абзац 2", None))
 
     def test_unmarked_table_keeps_first_row_and_multiline_cell(self):
         cell = "<w:tc>" + p("Проверить.") + p("Опечатать.") + "</w:tc>"

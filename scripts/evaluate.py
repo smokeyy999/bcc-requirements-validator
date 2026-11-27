@@ -18,6 +18,7 @@ from urllib.parse import quote, unquote
 
 from requirements_validator.__main__ import save_complete
 from requirements_validator.report import cell
+from scripts.verify_report import markdown_location
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -124,9 +125,9 @@ def parse_report(path, case):
         end = body.find('\n<a id="', heading.end())
         section = body[heading.end():end if end >= 0 else len(body)]
         lines = set()
-        for match in re.finditer(r'^\[R-[^\n]+? · \[строк[аи] (\d+)(?:–(\d+))?\]\([^\n]*?#L(\d+)\)\s*\n\s*\n>', section, re.M):
-            lo, hi, anchor = int(match[1]), int(match[2] or match[1]), int(match[3])
-            if lo != anchor or not 1 <= lo <= hi <= case.lines:
+        for citation in re.findall(r'^(\[R-[^\n]+? · \[строк[аи] [^\n]+)\n\s*\n>', section, re.M):
+            _, lo, hi = markdown_location(citation)
+            if hi > case.lines:
                 raise ValueError(f"{case.id}/{ident}: недопустимая ссылка на строки {lo}–{hi}")
             lines.update(range(lo, hi + 1))
         if not lines:

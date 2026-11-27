@@ -135,7 +135,7 @@ def index_docx(data):
                     headings.append((depth, text.strip()))
                     if not title:
                         title = text.strip()
-                    continue
+                    section = " / ".join(h for _, h in headings)
                 identifier = _source_id(text) or (text.strip() if re.fullmatch(r"\d+", text.strip()) else None)
                 blocks.append(Block(f"D{paragraph_no:04}", text, section, identifier,
                                     f"DOCX, абзац {paragraph_no}", kind, None, paragraph_no, paragraph_no))

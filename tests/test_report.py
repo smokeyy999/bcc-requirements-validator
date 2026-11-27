@@ -6,9 +6,35 @@ from tempfile import TemporaryDirectory
 
 from requirements_validator.report import author_proposal, render
 from requirements_validator.source import read_document
+from scripts.verify_report import verify
 
 
 class ReferenceRenderingTest(unittest.TestCase):
+    def test_multiline_source_links_open_the_range_and_keep_archived_reports_readable(self):
+        with TemporaryDirectory() as tmp:
+            source = Path(tmp) / "card #1.md"
+            source.write_bytes("Сервис возвращает номер\nв ответе на запрос.\n".encode())
+            document = read_document(source)
+            block, = document.blocks
+            claim = dict(id="R-M0001-01", block=block.id, quote=block.text, section=block.section,
+                         summary="Номер в ответе", source_id=None, status="Проверено",
+                         assessment="Результат указан.", findings=[])
+            counts = dict(requirements=1, defects=0, questions=0, gaps=0, ambiguities=0, recommendations=0)
+            result = dict(requirements=[claim], questions=[], findings=[], counts=counts,
+                          set_review=dict(readiness="Готово.", assessment="Проверено.", priorities=[]))
+            run = dict(origin="Фикстура", started="", finished="", seconds=0., commit="abc",
+                       state="чистая", provider="Фикстура", model="Фикстура")
+            saved = Path(tmp) / "review.md"
+            report = render(document, result, run, source, saved)
+            self.assertIn("[строки 1–2](card%20%231.md?plain=1#L1-L2)", report)
+            self.assertIn(r"[card \#1.md](card%20%231.md)", report)
+            for location in ("?plain=1#L1-L2", "#L1"):
+                saved.write_text(report.replace("?plain=1#L1-L2", location), encoding="utf-8")
+                self.assertEqual(1, verify(saved, source)["quotes"])
+            saved.write_text(report.replace("#L1-L2", "#L1-L3"), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Диапазоны"):
+                verify(saved, source)
+
     def test_agenda_groups_questions_and_routes_only_to_declared_contacts_in_scope(self):
         source_text = """# Мастерская
 ## Приём
@@ -60,7 +86,7 @@ class ReferenceRenderingTest(unittest.TestCase):
                 self.assertEqual(item.count(f"[Z-{i:03}](#z-{i:03})"), 1)
                 scope = agenda.split(f'<a id="{target}"></a>')[1].split("\n\n", 2)[1]
                 self.assertIn(contact, scope)
-                self.assertRegex(scope, r"\[строка \d+\]\(spec.md#L\d+\)")
+                self.assertRegex(scope, r"\[строка (\d+)\]\(spec.md\?plain=1#L\1\)")
             self.assertIn("1. Согласовать [Z-004](#z-004).", output)
             self.assertIn("Основания для снятия замечания — [R-M0002-01](#r-m0002-01).", output)
 

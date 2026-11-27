@@ -145,8 +145,12 @@ def render(doc, result, run, source_path, output_path):
     def source_location(block):
         if source_path.suffix.casefold() == ".docx":
             anchor = ""
+        elif block.page:
+            anchor = f"#page={block.page}"
         else:
-            anchor = f"#page={block.page}" if block.page else f"#L{block.first_line}"
+            anchor = f"?plain=1#L{block.first_line}"
+            if block.last_line != block.first_line:
+                anchor += f"-L{block.last_line}"
         return f'[{plain(block.location)}]({source_link}{anchor})'
 
     def evidence(item):
