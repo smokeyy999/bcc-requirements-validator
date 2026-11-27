@@ -88,6 +88,23 @@ class ReturnedStateTests(unittest.TestCase):
         self.assertEqual(representation_error(original, original, source), "")
         self.assertIn("queueTag", representation_error(dict(original, question=QUESTION, test=TEST), original, source))
 
+    def test_an_independent_failing_input_can_be_followed_by_a_known_control(self):
+        source = {"one": RULE, "field": "Поле themeTag имеет тип string.", "other": "Недопустимый язык вызывает ошибку."}
+        original = dict(ids=list(source), question="При прочих отказах обязательно ли поле themeTag?",
+                        test="Вызвать ошибку выбора языка и проверить поле themeTag.")
+        control = "При отклонении редакции отдельно проверить ранее сохранённые данные."
+        for independent in ("Проверить неверный язык, отменённую подписку и отсутствие доступа.",
+                            "Отправить недопустимый язык и прочитать поле themeTag."):
+            with self.subTest(independent=independent):
+                self.assertEqual(representation_error(dict(original, test=independent + " " + control),
+                                                      original, source), "")
+        for observation in ("Снова прочитать результат ошибки в том же ответе.",
+                            "Отдельно проверить полученный код ошибки и поле themeTag.",
+                            "Повторить чтение прежнего ответа и проверить сообщение об ошибке."):
+            with self.subTest(observation=observation):
+                self.assertIn("themeTag", representation_error(dict(original, test=control + " " + observation),
+                                                              original, source))
+
     def test_broad_rule_and_incidental_success_do_not_exempt_the_promised_return(self):
         generic = "При любом отказе вернуть прежний профиль клиенту."
         question = "При прочих отказах нужно ли возвращать клиенту прежние значения?"

@@ -45,6 +45,13 @@ _SUCCESS = re.compile(r"\b(?:при\s+успехе|(?:при|после)\s+ус�
 _FORMAL_FIELD = re.compile(r"\b(?:пол(?:е|я|ю|ем|ей|ях)|атрибут\w*|параметр\w*|field|attribute|parameter)"
                            r"\s+(?:[«\"\x60]([\w.-]+)[»\"\x60]|([A-Za-z_][A-Za-z0-9_.-]*))", re.I)
 _FAIL_CODE = re.compile(r"(?<!\w)[45]\d\d(?!\w)")
+_EXERCISE = re.compile(r"\b(?:проверить|вызвать|воспроизвести|смоделировать|отправить|подать|"
+                       r"повторить|test|trigger|simulate|submit|exercise)\s+", re.I)
+_OBSERVATION = re.compile(r"(?:(?:возвращ[её]нн\w*|полученн\w*|опубликованн\w*|прежн\w*|тот\s+же|"
+                          r"the|returned|received|same)\s+)*(?:HTTP\b|код\w*|статус\w*|тел[оае]|поле|поля|"
+                          r"чтени\w*|считывани\w*|извлечени\w*|наблюдени\w*|наличие|значени\w*|"
+                          r"результат\w*|сообщени\w*|ответ\w*|что\b|code|status|body|reading|inspection|"
+                          r"field|value|message|result|response)\b", re.I)
 _SCOPE_WORDS = re.compile(r"[^\W\d_]+", re.UNICODE)
 _GENERAL = re.compile(r"ошиб\w*|отказ\w*|отклон\w*|неуспеш\w*|неверн\w*|некоррект\w*|недопустим\w*|"
                       r"случа\w*|получени\w*|возникновени\w*|операци\w*|запрос\w*|значени\w*|"
@@ -127,7 +134,18 @@ def _contract_fields(question, source):
 
 
 def _only_promised_test(test, conditions, source):
-    return _targets_promised_case(test, conditions) and not _distinct_branch(test, conditions, source)
+    if not _targets_promised_case(test, conditions) or _distinct_branch(test, conditions, source):
+        return False
+    # A control for the known branch may follow an independent failing input.
+    # Reading the same response again does not introduce a second experiment.
+    for clause in re.split(r"[.;!?\n,]+", test):
+        if not _FAILURE.search(clause) or _targets_promised_case(clause, conditions):
+            continue
+        for action in _EXERCISE.finditer(clause):
+            target = clause[action.end():].strip()
+            if _FAILURE.search(target) and _terms(target) and not _OBSERVATION.match(target):
+                return False
+    return True
 
 
 def _promises_previous(quote):
