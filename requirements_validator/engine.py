@@ -8,12 +8,14 @@ from copy import deepcopy
 
 from .bounds import (capacity_pairs, diagnosis as capacity_diagnosis, linked as capacity_linked,
                      missing_capacity_basis, unresolved_capacity)
-from . import command_rules, observation_scope
+from . import command_rules, observation_scope, question_proof
 from .condition_evidence import direct_condition_evidence
 from .data_boundary import BOUNDARY_INSTRUCTION, data_boundary_error, storage_units
 from .example_scope import EXAMPLE_SCOPE_INSTRUCTION, input_scope_error, unbound_response_examples
 from .metrics import purpose, stage
 from .prompts import ADJUDICATE, CAPACITY_INSTRUCTION, EXTRACT, SYNTHESIZE
+from .question_language import QUESTION_LANGUAGE_INSTRUCTION, question_language_error
+from .coverage_review import supplement
 from .question_scope import (
     SCOPE_INSTRUCTION, candidate_scopes, identifier_limits, scope_error, source_boundaries, unreviewed_boundaries,
 )
@@ -98,6 +100,7 @@ DECISION = obj(id=STR, action=enum("оставить", "снять", "уточн
                same_decision_as=STR)
 AUDIT = obj(decisions=array(DECISION), assessment=STR, readiness=STR,
             priorities=array(obj(ids=array(STR), step=STR)))
+QUESTION_EDITS = obj(edits=array(obj(id=STR, question=STR, test=STR, decision=STR, outcomes=array(STR))))
 PATCH = obj(changes=array(obj(op=enum("replace", "append", "remove"), path=STR, value=STR)))
 MAX_AUDIT_PATCH_CHANGES = 64
 
@@ -901,6 +904,8 @@ def _final_decisions(raw, candidates, claims, signals=(), verified_refs=(), capa
         prior = originals[ident]
         try:
             finding = _adjudicate_one(decision, prior, source_quotes)
+            if issue := question_language_error(finding, source_quotes):
+                raise DraftError(issue, ["/question_mode", "/question", "/test", "/question_check"])
             if issue := input_scope_error(finding, prior, unbound_examples, source_quotes):
                 raise DraftError(issue, ["/action", "/case_check", "/question_mode", "/question", "/test", "/question_check"])
             if issue := scope_error(finding, prior, source_quotes):
@@ -1117,6 +1122,17 @@ def review(document, provider, progress=lambda msg: None):
         provider, SYNTHESIZE + instructions, payload, GLOBAL,
         lambda data: _set_result(data, claims, blocks, required, references, signals, verified_refs, boundaries,
                                  capacities, scheduled), progress)
+    candidates, matrix = supplement(provider, claims, blocks, candidates, references, instructions, progress)
+    if matrix:
+        trace_review = dict(trace_review, coverage=matrix)
+        instructions += (
+            "\nВ trace_review.coverage независимый проход проверил, какие сочетания условий и исходов "
+            "охвачены кандидатами. При вынесении решения проверь каждую относящуюся к нему строку "
+            "по источнику. Пока сочетание открыто, сохрани его в вопросе и наблюдаемом тесте. "
+            "При объединении два теста должны получить ответы из общего вопроса. "
+            "Проверь, кто получает каждое значение и какое исходное состояние задано."
+        )
+        instructions += "\n" + QUESTION_LANGUAGE_INSTRUCTION
     stage("adjudication")
     progress(f"Независимая проверка оснований и вопросов по всему источнику: замечаний {len(candidates)}.")
     fixed = [f for f in candidates if f.get("missing_target")]
@@ -1141,11 +1157,31 @@ def review(document, provider, progress=lambda msg: None):
         audit_payload["source_signals"] = signals
     if fixed:
         audit_payload["verified_references"] = [_audit_candidate(f) for f in fixed]
+    def check_decisions(data):
+        return _final_decisions(data, candidates, claims, signals, fixed, capacities,
+                                unbound_examples, scheduled, measurements, units)
+
+    raw = {}
+    def accept_decisions(data):
+        result = check_decisions(data)
+        if matrix:
+            raw.update(data)
+        return result
+
     findings, notes, set_review = _request(provider, ADJUDICATE + instructions,
-                                          audit_payload, AUDIT,
-                                          lambda data: _final_decisions(data, candidates, claims, signals, fixed,
-                                                                        capacities, unbound_examples, scheduled,
-                                                                        measurements, units), progress)
+                                          audit_payload, AUDIT, accept_decisions, progress)
+    if matrix and any(f["question"] for f in findings):
+        stage("question_proof")
+        progress("Вычитка открытых вопросов и проверка условий приёмочных тестов.")
+        question_rows = [{"id": f["id"], "question": f["question"], "test": f["test"],
+                          "evidence": f["ids"], "basis": f.get("question_basis"),
+                          "same_decision_as": f.get("same_decision_as", "")}
+                         for f in findings if f["question"] and not f.get("missing_target")]
+        proof_payload = {"source": payload["blocks"], "coverage": matrix, "questions": question_rows}
+        findings, notes, set_review = _request(
+            provider, question_proof.INSTRUCTION + "\n" + QUESTION_LANGUAGE_INSTRUCTION, proof_payload,
+            QUESTION_EDITS, lambda data: question_proof.apply_revisions(
+                data["edits"], raw, question_rows, check_decisions), progress)
     stage("validation")
     for claim in claims:
         ident = claim["id"]
@@ -1180,5 +1216,8 @@ def review(document, provider, progress=lambda msg: None):
               "gaps": sum(f["kind"] == "Предполагаемый пробел" for f in findings),
               "recommendations": sum(f["kind"] == "Рекомендация" for f in findings),
               "questions": len(questions)}
-    return dict(requirements=claims, findings=findings, questions=questions, counts=counts,
-                set_review=set_review, context=context)
+    result = dict(requirements=claims, findings=findings, questions=questions, counts=counts,
+                  set_review=set_review, context=context)
+    if matrix:
+        result["coverage_review"] = matrix
+    return result

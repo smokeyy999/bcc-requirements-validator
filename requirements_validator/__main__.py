@@ -161,6 +161,8 @@ def _run(source, output, progress, metrics):
         "counts": {**counts, "critical_defects": sum(f["counted"] and f["severity"] == "Критичная" for f in result["findings"]),
                    "blocking_questions": sum(q["blocking"] for q in result["questions"])},
     }
+    if result.get("coverage_review"):
+        meta["coverage_review"] = result["coverage_review"]
     publish(output, content, meta_path, meta)
     progress(f"Отчёт сохранён в {output.as_posix()}")
     progress(f"Метрики сохранены в {meta_path.as_posix()}")
