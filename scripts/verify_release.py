@@ -4,6 +4,7 @@ import hashlib
 import html
 import json
 from pathlib import Path
+from functools import lru_cache
 import re
 import subprocess
 from urllib.parse import unquote
@@ -14,6 +15,46 @@ from scripts.verify_report import verify
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def code_objects(root, commit):
+    """Read Git object IDs for all agent code and the declared runtime dependencies."""
+    rows = subprocess.check_output(
+        ["git", "ls-tree", "-z", commit, "--", "requirements_validator", "requirements.txt"],
+        cwd=root,
+    ).decode("ascii").rstrip("\0").split("\0")
+    objects = {}
+    for row in rows:
+        metadata, path = row.split("\t")
+        mode, kind, oid = metadata.split()
+        if path == "requirements_validator" and (mode, kind) == ("040000", "tree"):
+            objects["validator_tree"] = oid
+        elif path == "requirements.txt" and (mode, kind) == ("100644", "blob"):
+            objects["requirements_blob"] = oid
+    if objects.keys() != {"validator_tree", "requirements_blob"}:
+        raise ValueError(f"У версии {commit} отсутствуют код анализатора или файл зависимостей")
+    return objects
+
+
+@lru_cache(maxsize=None)
+def verify_revision(root, recorded_commit):
+    """Verify the public counterpart when the report records a historical commit."""
+    manifest = json.loads((root / "checks/historical-revisions.json").read_bytes())
+    if manifest["schema_version"] != 1:
+        raise ValueError("Неизвестная версия таблицы соответствия коммитов")
+    record = manifest["revisions"].get(recorded_commit)
+    if record is None:
+        subprocess.run(["git", "cat-file", "-e", recorded_commit + "^{commit}"], cwd=root, check=True)
+        return
+
+    public = record["public_commit"]
+    if not isinstance(public, str) or not re.fullmatch(r"[0-9a-f]{40}", public):
+        raise ValueError(f"Некорректная публичная версия для коммита {recorded_commit}")
+    subprocess.run(["git", "merge-base", "--is-ancestor", public, "HEAD"], cwd=root, check=True)
+    sources = code_objects(root, public)
+    if (sources["validator_tree"] != record["validator_tree"]
+            or sources["requirements_blob"] != record["requirements_blob"]):
+        raise ValueError(f"Код или зависимости публичной версии {public} расходятся с записью для {recorded_commit}")
 
 
 def verify_choices(proposal, body, location):
@@ -138,7 +179,7 @@ def inspect_run(metadata):
         raise ValueError(f'{report}: неверный источник')
     if not re.fullmatch(r'[a-f0-9]{40}', meta['commit']):
         raise ValueError(f'{report}: неверный формат версии')
-    subprocess.run(['git', 'cat-file', '-e', meta['commit'] + '^{commit}'], cwd=ROOT, check=True)
+    verify_revision(ROOT, meta['commit'])
     if (f'| Коммит реализации | `{meta["commit"]}` |' not in text
             or f'| Провайдер и модель | {meta["provider"]} · `{meta["model"]}` |' not in text):
         raise ValueError(f'{report}: паспорт версии или модели расходится с метриками')
