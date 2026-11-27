@@ -1,0 +1,12 @@
+2026-11-27T11:52:18+05:00
+> python -m requirements_validator --input benchmark/irrigation/requirements.md --output reports/review13/benchmark-runs/irrigation/r1/report.md
+Документ «Управление поливом теплицы» · исходных блоков 8 · SHA-256 1edf90ca21c24de23059219721af3040d926afbf610089d5f5f68da36489a3f7
+Версия 9ce4ce9bfcc355259f2b1e21c1117e634149106c · рабочая копия чистая
+Доступ подтверждён · OpenAI через Codex CLI · gpt-6.2-sol
+Выделение и оценка утверждений: пакет 1, блоков 8.
+Сквозная проверка всего документа: утверждений 11.
+Независимая проверка оснований и вопросов по всему источнику: замечаний 8.
+Отчёт сохранён в ./reports/review13/benchmark-runs/irrigation/r1/report.md
+Метрики сохранены в ./reports/review13/benchmark-runs/irrigation/r1/report/run-meta.json
+Готово за 263.9 с, включая запись · запросов модели 4 (повторных 0) · токены входа 66522, выхода 10241 · утверждений 11 · нарушений 5 · вопросов 7
+Exit 0, 264.1 s

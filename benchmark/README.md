@@ -21,11 +21,11 @@ python -m scripts.evaluate --repeat 3 --jobs 1 --resume --runs-dir .tmp/live/ben
 
 При достаточной квоте Codex можно передать `--jobs 2`. Тогда в каждом дочернем процессе извлечение идёт в один поток. Для отдельной отладки доступна команда `python -m scripts.evaluate --split dev --repeat 1 --runs-dir .tmp/dev-stage/runs --output .tmp/dev/evaluation.md`.
 
-По окончании в `reports/local/` появятся оценка, разбор незачтённых карточек и каталог `benchmark-runs/` с индивидуальными отчётами и паспортами. Чтобы перепроверить сравнение версий, пересчитайте три сохранённых прохода каждой. Верхняя команда читает результаты версии `48f37df`, нижняя — версии `5669ac8`. Оба пересчёта выполняются автономно.
+По окончании в `reports/local/` появятся оценка, разбор незачтённых карточек и каталог `benchmark-runs/` с индивидуальными отчётами и паспортами. Чтобы перепроверить сравнение версий, пересчитайте три сохранённых прохода каждой. Верхняя команда читает результаты версии `1a9fc9b`, нижняя — версии `9ce4ce9`. Оба пересчёта выполняются автономно.
 
 ```sh
-python -m scripts.evaluate --import-dir reports/review8/benchmark-runs --repeat 3 --output .tmp/review8/evaluation.md
-python -m scripts.evaluate --import-dir reports/finish4/benchmark-runs --repeat 3 --output .tmp/finish4/evaluation.md
+python -m scripts.evaluate --import-dir reports/review14/benchmark-runs --repeat 3 --output .tmp/review14/evaluation.md
+python -m scripts.evaluate --import-dir reports/review13/benchmark-runs --repeat 3 --output .tmp/review13/evaluation.md
 ```
 
 Для импорта нужен файл `<каталог>/<case>/r<N>/report.md` на каждую пару документа и повтора. ID документов: `dispatch`, `dispatch-base`, `irrigation`, `irrigation-base`, `subtitles`, `subtitles-base`, `indicator`. Для каждой исходной версии используется суффикс `-base`. Файл `report/run-meta.json` рядом с отчётом содержит метрики. Перед вызовами модели оценщик проверяет чистоту клона и возможность перенести отчёты из `.tmp/benchmark-runs/` в `reports/benchmark-runs/` с сохранением относительных ссылок на вход. После переноса он повторно проверяет паспорт, SHA-256 отчёта и вложенную ссылку на документ. При импорте исторических отчётов без полных метрик оценка явно помечается как диагностическая.
