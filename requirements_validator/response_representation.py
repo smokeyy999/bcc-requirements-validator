@@ -34,6 +34,100 @@ _FIELD_ONLY = re.compile(r"в каком (?:именно )?поле\b|\b(?:which
 _DETAIL = re.compile(r"структур|тип\b|тип[ае]\b|формат|кодиров|вложен|внутри|structure|format|type\b|encod", re.I)
 _CHOICE = re.compile(r"\b(?:или|либо|or)\b", re.I)
 _ENCODING = re.compile(r"вложен|отдельн\w* пол|плоск\w*|един\w* объект|одн\w* пол|nested|flat|separate fields|single field", re.I)
+_CONDITION = re.compile(r"\b(?:при|если|когда|when|if|on|in case of)\s+([^,.;:\n]+)", re.I)
+_OTHER_ERRORS = re.compile(r"\b(?:проч\w*|друг\w*|остальн\w*|ин(?:ых|ые|ом|ый|ой|ого)|"
+                           r"other|remaining)\s+(?:описанн\w*\s+)?(?:ошиб\w*|отказ\w*|неуспешн\w*|"
+                           r"отклон\w*|ошибочн\w*|errors?|failures?|rejections?)\b", re.I)
+_EXCEPT = re.compile(r"\b(?:кроме|помимо|за исключением|except(?:\s+for)?|other than|excluding)\s+"
+                     r"(?:(?:случа\w*|ошиб\w*|ветв\w*)\s+)?([^,?;.!]+)", re.I)
+_SUCCESS = re.compile(r"\b(?:при\s+успехе|(?:при|после)\s+успешн\w*|успешн\w*\s+(?:ответ|ветв|исход|сохран)"
+                      r"|(?:on|after)\s+success|successful\s+(?:response|result|operation)|HTTP\s+2(?:[0-9]{2}|xx))", re.I)
+_FORMAL_FIELD = re.compile(r"\b(?:пол(?:е|я|ю|ем|ей|ях)|атрибут\w*|параметр\w*|field|attribute|parameter)"
+                           r"\s+(?:[«\"\x60]([\w.-]+)[»\"\x60]|([A-Za-z_][A-Za-z0-9_.-]*))", re.I)
+_FAIL_CODE = re.compile(r"(?<!\w)[45]\d\d(?!\w)")
+_SCOPE_WORDS = re.compile(r"[^\W\d_]+", re.UNICODE)
+_GENERAL = re.compile(r"ошиб\w*|отказ\w*|отклон\w*|неуспеш\w*|неверн\w*|некоррект\w*|недопустим\w*|"
+                      r"случа\w*|получени\w*|возникновени\w*|операци\w*|запрос\w*|значени\w*|"
+                      r"люб\w*|кажд\w*|всех|всяк\w*|при|для|an?|any|all|every|the|of|in|for|is|was|"
+                      r"invalid|error|failure|reject\w*|request|operation", re.I)
+
+
+def _terms(text):
+    return {re.sub(r"(?:ами|ями|ой|ей|ам|ям|ах|ях|ом|ем|[аяыиуюео])$", "", word)[:5]
+            if re.fullmatch(r"[а-яё]+", word) else word
+            for word in _SCOPE_WORDS.findall(text.casefold()) if len(word) > 2 and not _GENERAL.fullmatch(word)}
+
+
+def _branches(promises):
+    conditions = []
+    for quote in promises:
+        for sentence in re.split(r"[.;\n]+", quote):
+            promise = _PROMISE.search(sentence)
+            if not promise or not _promises_previous(sentence):
+                continue
+            condition = _CONDITION.search(sentence[:promise.start()])
+            conditions.append(_terms(condition[1]) if condition else set())
+    return conditions
+
+
+def _targets_promised_case(text, conditions):
+    # A valid input can be present alongside an invalid one. Only compare the
+    # object of rejection, not all nouns somewhere in the test.
+    for match in _FAILURE.finditer(text):
+        after = re.match(r"\w*\s+((?:[\w-]+\s+)?[\w-]+)", text[match.end():])
+        before = re.search(r"([\w-]+)\s+$", text[:match.start()])
+        following = after[1].split() if after else []
+        words = following[:2] if following and _GENERAL.fullmatch(following[0]) else following[:1]
+        if before and not words:
+            words.append(before[1])
+        if any(_terms(" ".join(words)) & condition for condition in conditions):
+            return True
+    return False
+
+
+def _distinct_branch(question, conditions, source):
+    # A separate success branch is meaningful only if the source mentions success.
+    success, failure = _SUCCESS.search(question), _FAILURE.search(question)
+    explicit_case = _targets_promised_case(question, conditions)
+    if (success and not explicit_case and (not failure or success.start() < failure.start())
+            and re.search(r"успе[хш]|success|HTTP\s+2\d\d", source, re.I)):
+        return "success"
+    if not conditions or not all(conditions):
+        return ""
+    known = set.union(*conditions)
+    alternative = "\n".join(line for line in source.splitlines() if not _promises_previous(line)
+                            and (_FAILURE.search(line) or _FAIL_CODE.search(line)))
+    if not alternative:
+        return ""
+    if any(_terms(m[1]) & known for m in _EXCEPT.finditer(question)):
+        return "other"
+    other = _OTHER_ERRORS.search(question)
+    if other:
+        context = re.match(r"\s+((?:[\w-]+\s+){0,2}[\w-]+)", question[other.end():])
+        if not context or not _terms(context[1]).intersection(known):
+            return "other"
+    specific_codes = set(_FAIL_CODE.findall(question)) & set(_FAIL_CODE.findall(source))
+    # A bare HTTP code can cover the explicitly promised rejection, too. Require
+    # another described failure condition before treating the code as independent.
+    for match in _CONDITION.finditer(question):
+        clause = re.split(r"\b(?:долж\w*|обяза\w*|нуж\w*|следует|надо|верн\w*|возвращ\w*|содерж\w*|поле|"
+                          r"переда\w*|выда\w*|включ\w*|does|should|must|return|contain|field)\b",
+                          match[1], maxsplit=1, flags=re.I)[0]
+        terms = _terms(clause)
+        if _FAILURE.search(clause) and terms and not terms & known and terms & _terms(alternative):
+            return "other"
+    if len(specific_codes) > 1 and not explicit_case:
+        return "other"
+    return ""
+
+
+def _contract_fields(question, source):
+    fields = [match[1] or match[2] for match in _FORMAL_FIELD.finditer(question)]
+    return [name for name in dict.fromkeys(fields) if re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", source)]
+
+
+def _only_promised_test(test, conditions, source):
+    return _targets_promised_case(test, conditions) and not _distinct_branch(test, conditions, source)
 
 
 def _promises_previous(quote):
@@ -65,13 +159,27 @@ def representation_error(finding, original, source_quotes):
     if not finding or not finding.get("question"):
         return ""
     question = finding["question"]
-    if not (_PRIOR.search(question) and (_ASK_RETURN.search(question) or _BODY.search(question))):
-        return ""
     proof = finding.get("question_basis", {})
     ids = set(finding["ids"]) | set(original["ids"]) | set(proof.get("checked_ids", []))
     quotes = [source_quotes[ident] for ident in ids if ident in source_quotes]
     promises = [quote for quote in quotes if _promises_previous(quote)]
     if not promises:
+        return ""
+    source = "\n".join(quotes)
+    conditions = _branches(promises)
+    original_question = original.get("question", "")
+    original_branch = _distinct_branch(original_question, conditions, source)
+    current_branch = _distinct_branch(question, conditions, source)
+    fields = _contract_fields(original_question, source) if original_branch else []
+    if fields:
+        names = [re.compile(r"(?<!\w)" + re.escape(name) + r"(?!\w)") for name in fields]
+        changed_test = finding["test"] != original.get("test")
+        if (original_branch != current_branch or not all(name.search(question) for name in names)
+                or changed_test and _only_promised_test(finding["test"], conditions, source)):
+            return (f"Исходный вопрос о применимости поля {', '.join(fields)} относится к отдельно указанной "
+                    "ветви ответа. Сохрани в вопросе и тесте именно это условие и поле. Другая ветвь с "
+                    "обязательным возвратом прежнего состояния не определяет контракт этой ветви.")
+    if current_branch or not (_PRIOR.search(question) and (_ASK_RETURN.search(question) or _BODY.search(question))):
         return ""
     # A rule explicitly excluding those values from the error payload is an
     # actual competing requirement. An example with an unknown input is not.
@@ -100,6 +208,10 @@ def representation_error(finding, original, source_quotes):
 
 REPRESENTATION_INSTRUCTION = """
 Для returned_state_on_error сверяй отдельно исход операции и его представление для получателя.
+Сопоставляй условие именно того отказа, для которого написано правило, с открытым решением
+кандидата. Упоминание этой нормы в checked или в известной части теста не переносит её на успех
+и остальные ошибки. Для вопроса об обязательности конкретного поля в других описанных ветвях
+сохрани эти ветви и это поле в вопросе и тесте. Не подменяй их форматом возврата прежних данных.
 Если правило требует вернуть прежние данные вместе с отказом, возврат значений уже обязателен.
 Сопоставь с контрактом именно этой ветви. Поля для успеха, образец без запроса и сохранность в
 хранилище сами по себе не определяют представление прежних данных при отказе. Когда в правиле

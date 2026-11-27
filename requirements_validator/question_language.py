@@ -10,6 +10,9 @@ _AGREEMENT = {
     "должны": ("приложения", "устройства", "системы", "сервисы", "клиенты", "контроллеры", "пользователи"),
 }
 _EXPECTED = {subject: modal for modal, subjects in _AGREEMENT.items() for subject in subjects}
+_SINGULAR_ATTRIBUTE = r"(?:единице|формате|валюте|кодировке|состоянии|режиме|поле|часовом поясе|масштабе)"
+_MIXED_ATTRIBUTES = re.compile(r"\bв\s+каких\s+" + _SINGULAR_ATTRIBUTE +
+                               r"\s+и\s+(?:в\s+)?" + _SINGULAR_ATTRIBUTE + r"\b", re.I)
 _SUBJECT = r"(?P<subject>" + "|".join(_EXPECTED) + r")\b"
 _MODAL = r"(?P<modal>долж(?:ен|на|но|ны))\b"
 _VERB = r"(?:вызывать|вызвать|использовать|применять|применить|выбирать|выбрать|отправлять|отправить|читать|прочитать|сохранять|сохранить)"
@@ -44,6 +47,10 @@ def question_language_error(finding, source_quotes):
     if not finding or not finding.get("question"):
         return ""
     text = _QUOTED.sub("…", finding["question"]).casefold()
+    if _MIXED_ATTRIBUTES.search(text):
+        return ("В вопросе перед двумя существительными в единственном числе использована форма «в каких». "
+                "Согласуй вопросительное слово с каждым существительным и повтори предлог, например "
+                "«в какой единице и в каком формате». Сохрани оба запрашиваемых свойства.")
     ids = set(finding.get("ids", ())) | set(finding.get("question_basis", {}).get("checked_ids", ()))
     quotes = [source_quotes[i].casefold() for i in ids if i in source_quotes]
     for pattern in (_DIRECT_SUBJECT, _FRONTED_OBJECT):
@@ -66,4 +73,5 @@ QUESTION_LANGUAGE_INSTRUCTION = """
 вынесенным вперёд объектом согласуй «должен / должна / должно / должны» с исполнителем.
 Если возможны два чтения, назови исполнителя перед сказуемым и используй прямой порядок слов.
 При языковой правке сохрани открытое решение, участников, условие и ожидаемый результат теста.
+Когда вопрос касается двух разнородных свойств, согласуй определение с каждым существительным.
 """

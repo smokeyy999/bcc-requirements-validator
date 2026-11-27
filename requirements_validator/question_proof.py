@@ -25,14 +25,24 @@ basis, согласованные с ними decision и два outcomes. Дл�
 Владелец получает сам вопрос и тест. Не переноси существенное условие только в пояснение."""
 
 
-def apply_revisions(edits, raw, findings, check):
+def apply_revisions(edits, raw, findings, check, *, reopen=(), allowed_reopen=(), summaries=(), after=None):
     """Validate the edited decisions together, using the original adjudication contract."""
-    if not edits:
-        return check(raw)
     by_id = {f["id"]: f for f in findings if f.get("question")}
-    revised = deepcopy(raw)
+    revised = deepcopy(raw) if edits or reopen or summaries else raw
     decisions = {d["id"]: d for d in revised["decisions"]}
     seen = set()
+    for replacement in reopen:
+        ident = replacement["id"]
+        if (ident not in allowed_reopen or ident not in decisions or ident in seen
+                or replacement["action"] == "снять" or replacement["question_mode"] == "убрать"
+                or replacement["same_decision_as"]):
+            raise ValueError(f"{ident}: восстановить можно только проверяемое самостоятельное решение по исходному кандидату.")
+        seen.add(ident)
+        decisions[ident].update(replacement)
+    if bool(reopen) != bool(summaries) or len(summaries) > 1:
+        raise ValueError("Только при восстановлении вопросов нужен один обновлённый итог рецензии с приоритетами.")
+    if summaries:
+        revised.update(summaries[0])
     for i, edit in enumerate(edits):
         ident = edit["id"]
         if ident in seen or ident not in by_id or ident not in decisions:
@@ -49,7 +59,10 @@ def apply_revisions(edits, raw, findings, check):
             raise ValueError(f"Правка {i}: у этой карточки нет отдельной записи basis.")
         decision.update(question_mode="заменить", question=edit["question"], test=edit["test"])
     try:
-        return check(revised)
+        result = check(revised)
+        if after:
+            after(revised, result)
+        return result
     except ValueError as error:
         # Индексы в сообщении валидатора относятся к полному набору решений, а правки
         # данной фазы адресуются по ID. Не передаём чужие пути в протокол PATCH.

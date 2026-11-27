@@ -10,6 +10,13 @@ def review(question, *facts):
 
 
 class QuestionLanguageTests(unittest.TestCase):
+    def test_singular_attributes_each_keep_their_own_agreement(self):
+        self.assertTrue(review("В каких единице и формате поступает длительность?"))
+        self.assertTrue(review("В каких кодировке и формате сервис передаёт текст?"))
+        self.assertFalse(review("В какой единице и в каком формате поступает длительность?"))
+        self.assertFalse(review("В каких форматах и кодировках сервис передаёт текст?"))
+        self.assertFalse(review("Нужно ли изменить строку «В каких единице и формате»?"))
+
     def test_fronted_object_is_not_the_actor_of_the_request(self):
         rule = "Приложение читает и сохраняет настройки через интерфейс."
         self.assertIn("должно", review("Какой HTTP-метод должен вызывать приложение для сохранения?", rule))

@@ -8,7 +8,7 @@ from copy import deepcopy
 
 from .bounds import (capacity_pairs, diagnosis as capacity_diagnosis, linked as capacity_linked,
                      missing_capacity_basis, unresolved_capacity)
-from . import command_rules, observation_scope, question_proof
+from . import command_rules, coverage_handoff, deferred_acceptance, observation_scope, question_proof
 from .condition_evidence import direct_condition_evidence
 from .data_boundary import BOUNDARY_INSTRUCTION, data_boundary_error, storage_units
 from .example_scope import EXAMPLE_SCOPE_INSTRUCTION, input_scope_error, unbound_response_examples
@@ -101,6 +101,12 @@ DECISION = obj(id=STR, action=enum("оставить", "снять", "уточн
 AUDIT = obj(decisions=array(DECISION), assessment=STR, readiness=STR,
             priorities=array(obj(ids=array(STR), step=STR)))
 QUESTION_EDITS = obj(edits=array(obj(id=STR, question=STR, test=STR, decision=STR, outcomes=array(STR))))
+HANDOFF_EDITS = obj(**QUESTION_EDITS["properties"], reopened=array(DECISION),
+                    summary=array(obj(assessment=STR, readiness=STR,
+                                      priorities=AUDIT["properties"]["priorities"])),
+                    dispositions=array(obj(key=STR, status=enum("покрыто", "закрыто"), owner=STR,
+                                           question_quote=STR, test_quote=STR, source_id=STR, source_quote=STR,
+                                           reason=STR)))
 PATCH = obj(changes=array(obj(op=enum("replace", "append", "remove"), path=STR, value=STR)))
 MAX_AUDIT_PATCH_CHANGES = 64
 
@@ -592,7 +598,7 @@ def _check_traces(raw, by_id, required, findings):
 
 
 def _set_result(raw, claims, blocks, required, references, signals=(), verified_refs=(), boundaries=None,
-                capacities=(), scheduled=()):
+                capacities=(), scheduled=(), procedures=()):
     _nonempty(raw, "assessment", "readiness")
     if any(not step.strip() for step in raw["priorities"]):
         raise ValueError("Пустой шаг в порядке исправлений")
@@ -640,6 +646,12 @@ def _set_result(raw, claims, blocks, required, references, signals=(), verified_
             errors.append(command_rules.diagnosis(pair))
             paths.extend(["/findings/-", "/priorities/-"])
             paths.extend(f"/findings/{i}" for i, entry in checked.items() if command_rules.linked(pair, entry))
+    for procedure in procedures:
+        if deferred_acceptance.missing(procedure, findings):
+            errors.append(deferred_acceptance.diagnosis(procedure))
+            paths.extend(["/findings/-", "/priorities/-", "/resolved/-"])
+            paths.extend(f"/findings/{i}" for i, entry in checked.items()
+                         if deferred_acceptance.linked(procedure, entry))
     for signal in signals:
         ids = set(signal["claims"])
         if not ids or grouped_in(signal, findings):
@@ -888,7 +900,7 @@ def _adjudicate_one(d, original, source_quotes=None):
 
 
 def _final_decisions(raw, candidates, claims, signals=(), verified_refs=(), capacities=(), unbound_examples=None,
-                     scheduled=(), measurement_scopes=(), stored_units=()):
+                     scheduled=(), measurement_scopes=(), stored_units=(), procedures=()):
     _nonempty(raw, "assessment", "readiness")
     originals = {f["id"]: f for f in candidates}
     source_quotes = {c["id"]: c["quote"] for c in claims}
@@ -973,6 +985,11 @@ def _final_decisions(raw, candidates, claims, signals=(), verified_refs=(), capa
             errors.append(command_rules.diagnosis(pair))
             paths.extend(f"/decisions/{i}" for i, d in enumerate(raw["decisions"])
                          if d["id"] in originals and command_rules.linked(pair, originals[d["id"]]))
+    for procedure in procedures:
+        if deferred_acceptance.missing(procedure, kept):
+            errors.append(deferred_acceptance.diagnosis(procedure))
+            paths.extend(f"/decisions/{i}" for i, d in enumerate(raw["decisions"])
+                         if d["id"] in originals and deferred_acceptance.linked(procedure, originals[d["id"]]))
     for signal in signals:
         if signal["type"] != "unit_scale" or signal["qualified"] or grouped_in(signal, kept):
             continue
@@ -1053,6 +1070,68 @@ def _questions(findings):
     return [questions[key] for key in sorted(questions, key=rank.get)]
 
 
+def _proofread_questions(provider, matrix, raw, reviewed, candidates, audit_payload, check_decisions, progress):
+    findings = reviewed[0]
+    groups = _questions(findings)
+    handoffs = coverage_handoff.build(matrix, raw, findings, groups, candidates)
+    if not groups and not handoffs:
+        return reviewed
+    stage("question_proof")
+    progress("Вычитка открытых вопросов и проверка условий приёмочных тестов.")
+    question_rows = [{"id": f["id"], "question": f["question"], "test": f["test"],
+                      "evidence": f["ids"], "basis": f.get("question_basis"),
+                      "same_decision_as": f.get("same_decision_as", "")}
+                     for f in findings if f["question"] and not f.get("missing_target")]
+    proof_payload = {"source": audit_payload["blocks"], "coverage": matrix, "questions": question_rows}
+    proof_instruction = question_proof.INSTRUCTION + "\n" + QUESTION_LANGUAGE_INSTRUCTION
+    for field, instruction in (("refund_rules", REFUND_INSTRUCTION),
+                               ("returned_state_on_error", REPRESENTATION_INSTRUCTION),
+                               ("stored_units", BOUNDARY_INSTRUCTION),
+                               ("measurement_scopes", observation_scope.INSTRUCTION)):
+        if field in audit_payload:
+            proof_payload[field] = audit_payload[field]
+            proof_instruction += "\n" + instruction
+    proof_schema = QUESTION_EDITS
+    reopen_ids = set()
+    if handoffs:
+        proof_payload["handoffs"] = handoffs
+        proof_payload["published_queue"] = groups
+        transitioned_keys = {row["key"] for row in handoffs}
+        proof_payload["coverage"] = [row for row in matrix if row["key"] not in transitioned_keys]
+        open_owners = {f["id"] for f in findings if f["question"] and not f.get("same_decision_as")}
+        reopen_ids = {row["finding_id"] for row in handoffs} - open_owners
+        proof_payload["original_candidates"] = [f for f in audit_payload["candidates"] if f["id"] in reopen_ids]
+        proof_payload["current_decisions"] = [d for d in raw["decisions"] if d["id"] in reopen_ids]
+        proof_payload["claim_quotes"] = {c["id"]: c["quote"] for c in audit_payload["claims"]}
+        proof_payload["previous_summary"] = {k: v for k, v in raw.items() if k != "decisions"}
+        proof_schema = HANDOFF_EDITS
+        proof_instruction += (
+            "\n" + coverage_handoff.INSTRUCTION +
+            "\nЕсли ранее снятое или объединённое решение необходимо для приёмки и ни один итоговый "
+            "вопрос не может его покрыть без смешения разных решений, восстанови исходный кандидат: "
+            "в reopened верни полноценный DECISION с прежним ID, обоснованием и вопросом. "
+            "Тогда обнови общую оценку, готовность и приоритеты (одна запись summary). Иначе reopened "
+            "и summary пусты. Соблюдай договор полей исходной рецензии. Каждую проверку закрывает "
+            "реально публикуемая пара вопроса и теста либо дословная опора в ТЗ."
+        )
+    def verify_words(data):
+        dispositions = data.get("dispositions", [])
+        def accept_handoffs(final_raw, result):
+            coverage_handoff.verify(handoffs, dispositions, _questions(result[0]),
+                                    proof_payload["claim_quotes"], final_raw)
+        result = question_proof.apply_revisions(
+            data["edits"], raw, question_rows, check_decisions, reopen=data.get("reopened", []),
+            allowed_reopen=reopen_ids, summaries=data.get("summary", []),
+            after=accept_handoffs if handoffs else None)
+        checked_by_key = {item["key"]: item for item in dispositions}
+        for row in matrix:
+            if row["key"] in checked_by_key:
+                row["final_check"] = checked_by_key[row["key"]]
+        return result
+    return _request(
+        provider, proof_instruction, proof_payload, proof_schema, verify_words, progress)
+
+
 def review(document, provider, progress=lambda msg: None):
     blocks = {b.id: b for b in document.blocks}
     if len(blocks) != len(document.blocks) or not blocks:
@@ -1109,6 +1188,11 @@ def review(document, provider, progress=lambda msg: None):
     if scheduled:
         payload["scheduled_command_rules"] = scheduled
         instructions += "\n" + command_rules.INSTRUCTION
+    procedures = deferred_acceptance.promised_procedures(document.blocks, claims)
+    if procedures:
+        focused_checks["deferred_procedures"] = procedures
+        payload["deferred_procedures"] = procedures
+        instructions += "\n" + deferred_acceptance.INSTRUCTION
     boundaries = source_boundaries(document.blocks)
     if boundaries:
         payload["source_boundaries"] = boundaries
@@ -1121,7 +1205,7 @@ def review(document, provider, progress=lambda msg: None):
     candidates, resolved, trace_review = _request(
         provider, SYNTHESIZE + instructions, payload, GLOBAL,
         lambda data: _set_result(data, claims, blocks, required, references, signals, verified_refs, boundaries,
-                                 capacities, scheduled), progress)
+                                 capacities, scheduled, procedures), progress)
     candidates, matrix = supplement(provider, claims, blocks, candidates, references, instructions, progress)
     if matrix:
         trace_review = dict(trace_review, coverage=matrix)
@@ -1159,7 +1243,7 @@ def review(document, provider, progress=lambda msg: None):
         audit_payload["verified_references"] = [_audit_candidate(f) for f in fixed]
     def check_decisions(data):
         return _final_decisions(data, candidates, claims, signals, fixed, capacities,
-                                unbound_examples, scheduled, measurements, units)
+                                unbound_examples, scheduled, measurements, units, procedures)
 
     raw = {}
     def accept_decisions(data):
@@ -1168,20 +1252,10 @@ def review(document, provider, progress=lambda msg: None):
             raw.update(data)
         return result
 
-    findings, notes, set_review = _request(provider, ADJUDICATE + instructions,
-                                          audit_payload, AUDIT, accept_decisions, progress)
-    if matrix and any(f["question"] for f in findings):
-        stage("question_proof")
-        progress("Вычитка открытых вопросов и проверка условий приёмочных тестов.")
-        question_rows = [{"id": f["id"], "question": f["question"], "test": f["test"],
-                          "evidence": f["ids"], "basis": f.get("question_basis"),
-                          "same_decision_as": f.get("same_decision_as", "")}
-                         for f in findings if f["question"] and not f.get("missing_target")]
-        proof_payload = {"source": payload["blocks"], "coverage": matrix, "questions": question_rows}
-        findings, notes, set_review = _request(
-            provider, question_proof.INSTRUCTION + "\n" + QUESTION_LANGUAGE_INSTRUCTION, proof_payload,
-            QUESTION_EDITS, lambda data: question_proof.apply_revisions(
-                data["edits"], raw, question_rows, check_decisions), progress)
+    reviewed = _request(provider, ADJUDICATE + instructions, audit_payload, AUDIT, accept_decisions, progress)
+    if matrix:
+        reviewed = _proofread_questions(provider, matrix, raw, reviewed, candidates, audit_payload, check_decisions, progress)
+    findings, notes, set_review = reviewed
     stage("validation")
     for claim in claims:
         ident = claim["id"]

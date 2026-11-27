@@ -4,6 +4,7 @@ import re
 
 from .metrics import stage
 from .prompts import COMMON
+from .response_matrix import response_matrix
 from .text import text_key
 
 
@@ -93,6 +94,16 @@ def supplement(provider, claims, blocks, candidates, references, instructions, p
     payload = dict(blocks=[e._source(b) for b in blocks.values()],
                    claims=[{k: c[k] for k in ("id", "block", "quote", "summary")} for c in claims],
                    axes=axes, candidates=[e._audit_candidate(f) for f in candidates])
+    if contracts := response_matrix(blocks.values()):
+        payload["response_contracts"] = contracts
+        instructions += (
+            "\nВ response_contracts собраны поля, условия в таблицах результата и реально показанные "
+            "ключи примеров каждой ветви. Проследи каждое поле с неустановленной обязательностью "
+            "отдельно для перечисленных классов исходов. Если применимость полей уже задана, "
+            "зафиксируй это основание. Пример может быть сокращённым. Отсутствие ключа в примере "
+            "само по себе не устанавливает обязательность или нарушение. Различай общие для группы "
+            "исходов поля и правило, прямо отнесённое к одному частному отказу."
+        )
     stage("coverage_review")
     progress("Независимая сверка решений между разделами и проверенными кандидатами.")
     return e._request(provider, _COVERAGE + instructions, payload, schema,

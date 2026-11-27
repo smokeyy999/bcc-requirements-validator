@@ -31,3 +31,43 @@ class QuestionProofTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "Неподтверждённая"):
             apply_revisions([self.edit], self.raw, self.accepted, reject)
+
+    def test_reopening_requires_an_existing_decision_under_review_and_a_new_summary(self):
+        previous = {"decisions": [{"id": "Z-002", "action": "снять", "question_mode": "убрать",
+                                   "question_check": [], "same_decision_as": ""}]}
+        replacement = dict(previous["decisions"][0], action="оставить", question_mode="сохранить")
+        summary = {"assessment": "Остался один вопрос.", "readiness": "Требуется согласование.",
+                   "priorities": [{"ids": ["Z-002"], "step": "Уточнить источник."}]}
+        with self.assertRaises(ValueError):
+            apply_revisions([], previous, [], lambda x: x, reopen=[replacement], summaries=[summary])
+        with self.assertRaises(ValueError):
+            apply_revisions([], previous, [], lambda x: x, reopen=[replacement], allowed_reopen={"Z-002"})
+        result = apply_revisions([], previous, [], lambda x: x, reopen=[replacement],
+                                 allowed_reopen={"Z-002"}, summaries=[summary])
+        self.assertEqual(result["decisions"][0]["action"], "оставить")
+        self.assertEqual(previous["decisions"][0]["action"], "снять")
+
+    def test_empty_queue_still_reviews_why_an_open_case_disappeared(self):
+        from requirements_validator import engine
+
+        quote = "При первом открытии каталог возвращает пустой список."
+        matrix = [dict(key="first", finding_id="Z-002", status="новое решение", decision="Экран до заполнения каталога",
+                       known="Каталог отдаёт данные экрану.", distinction="Первое открытие.",
+                       checked=["R-1"], question="Что вернёт каталог?", test="Проверить первое открытие.",
+                       outcomes=["Пустой список.", "Ошибка чтения."])]
+        raw = {"decisions": [dict(id="Z-002", action="снять", same_decision_as="", reason="Ответ описан.")]}
+        audit = dict(blocks=[], candidates=[{"id": "Z-002"}], claims=[dict(id="R-1", quote=quote)])
+        class Provider:
+            def ask(self, prompt, schema):
+                self.schema = schema
+                return dict(edits=[], reopened=[], summary=[], dispositions=[
+                    dict(key="first", status="закрыто", owner="", question_quote="", test_quote="",
+                         source_id="R-1", source_quote="каталог возвращает пустой список",
+                         reason="Для первого открытия результат чтения каталога уже задан как пустой список.")])
+        provider = Provider()
+        reviewed = ([], {}, {})
+        result = engine._proofread_questions(provider, matrix, raw, reviewed, [], audit,
+                                             lambda decision: reviewed, lambda msg: None)
+        self.assertEqual(result, reviewed)
+        self.assertIs(provider.schema, engine.HANDOFF_EDITS)
+        self.assertEqual(matrix[0]["final_check"]["source_id"], "R-1")

@@ -65,3 +65,41 @@ class ReturnedStateTests(unittest.TestCase):
     def test_missing_values_may_legitimately_fail_the_acceptance_test(self):
         self.assertEqual(issue(outcomes=["Тело без прежних данных не проходит проверку.",
                                          "Все прежние значения переданы в согласованных полях."]), "")
+
+    def test_other_error_contract_is_independent_of_one_specific_rejection(self):
+        source = {"one": RULE, "field": "Поле frozenFlag имеет тип string.", "different": "При отказе в доступе выдать ошибку."}
+        original = dict(ids=list(source),
+                        question="При прочих отказах нужно ли включать поле frozenFlag с прежним значением?",
+                        test="Вызвать отказ в доступе и проверить frozenFlag в теле ответа.")
+        self.assertEqual(representation_error(original, original, source), "")
+        independent = dict(original, question="При отказе в доступе нужно ли возвращать поле frozenFlag с прежним значением?")
+        self.assertEqual(representation_error(independent, original, source), "")
+        switched = dict(original, question=QUESTION, test=TEST)
+        self.assertIn("frozenFlag", representation_error(switched, original, source))
+        self.assertIn("frozenFlag", representation_error(dict(original, test="Отклонить редакцию и проверить старый профиль."),
+                                                        original, source))
+        changed = dict(original, test="С допустимой редакцией вызвать отказ в доступе и прочитать frozenFlag.")
+        self.assertEqual(representation_error(changed, original, source), "")
+
+    def test_success_contract_stays_independent_of_returned_state_on_failure(self):
+        source = {"one": RULE, "field": "Ответ при успехе: поле queueTag имеет тип string."}
+        original = dict(ids=list(source), question="При успехе нужно ли возвращать поле queueTag с прежним значением?",
+                        test="Завершить операцию успешно и сверить поле queueTag с прежним значением.")
+        self.assertEqual(representation_error(original, original, source), "")
+        self.assertIn("queueTag", representation_error(dict(original, question=QUESTION, test=TEST), original, source))
+
+    def test_broad_rule_and_incidental_success_do_not_exempt_the_promised_return(self):
+        generic = "При любом отказе вернуть прежний профиль клиенту."
+        question = "При прочих отказах нужно ли возвращать клиенту прежние значения?"
+        self.assertIn("представлением", issue(question, rules=[generic, "При отказе в доступе выдать ошибку."]))
+        main = "При отклонении редакции можно ли не возвращать прежний профиль, записанный при успешной публикации?"
+        self.assertIn("представлением", issue(main, rules=[RULE, "При успехе вернуть ответ."]))
+        same = "При других ошибках валидации нужно ли возвращать клиенту прежний профиль?"
+        validation = "При ошибке валидации вернуть прежний профиль клиенту."
+        self.assertIn("представлением", issue(same, rules=[validation, "При отказе в доступе выдать ошибку."]))
+
+    def test_no_field_in_source_does_not_manufacture_a_contract(self):
+        source = {"one": RULE, "other": "При отказе в доступе выдать ошибку."}
+        invented = dict(ids=list(source), question="При прочих отказах всегда передавать поле madeUp?",
+                        test="Проверить ответ без доступа.")
+        self.assertEqual(representation_error(dict(invented, question=QUESTION, test=TEST), invented, source), "")
