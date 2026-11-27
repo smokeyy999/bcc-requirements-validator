@@ -1,0 +1,13 @@
+2026-11-27T10:48:22+05:00
+> python -m requirements_validator --input benchmark/irrigation/baseline.md --output reports/review9/benchmark-runs/irrigation-base/r3/report.md
+Документ «Управление поливом теплицы» · исходных блоков 8 · SHA-256 1fff097659233b6c75735ba3d38f3e444b716cbb5a2185dc0b83264ffbb355b5
+Версия af5d4e1b8758af5da7be6b9dc9e2173300d2f3c7 · рабочая копия чистая
+Доступ подтверждён · OpenAI через Codex CLI · gpt-6.2-sol
+Выделение и оценка утверждений: пакет 1, блоков 8.
+Сквозная проверка всего документа: утверждений 10.
+Проверка черновика: /findings/4: В fix есть число, не подтверждённое цитатами. Исправь правку или задай вопрос с тестом. Запрошена одна точечная правка.
+Независимая проверка оснований и вопросов по всему источнику: замечаний 5.
+Отчёт сохранён в ./reports/review9/benchmark-runs/irrigation-base/r3/report.md
+Метрики сохранены в ./reports/review9/benchmark-runs/irrigation-base/r3/report/run-meta.json
+Готово за 208.7 с, включая запись · запросов модели 5 (повторных 1) · токены входа 83073, выхода 8075 · утверждений 10 · нарушений 1 · вопросов 4
+Exit 0, 208.9 s

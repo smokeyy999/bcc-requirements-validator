@@ -1,0 +1,12 @@
+2026-11-27T10:45:30+05:00
+> python -m requirements_validator --input benchmark/dispatch/requirements.md --output reports/review9/benchmark-runs/dispatch/r2/report.md
+Документ «Отправка грузовых ведомостей» · исходных блоков 9 · SHA-256 1e507ca671de044391a0b51e7db97e070470c73923ec6e9d2337b9447027d115
+Версия af5d4e1b8758af5da7be6b9dc9e2173300d2f3c7 · рабочая копия чистая
+Доступ подтверждён · OpenAI через Codex CLI · gpt-6.2-sol
+Выделение и оценка утверждений: пакет 1, блоков 9.
+Сквозная проверка всего документа: утверждений 14.
+Независимая проверка оснований и вопросов по всему источнику: замечаний 6.
+Отчёт сохранён в ./reports/review9/benchmark-runs/dispatch/r2/report.md
+Метрики сохранены в ./reports/review9/benchmark-runs/dispatch/r2/report/run-meta.json
+Готово за 205.4 с, включая запись · запросов модели 4 (повторных 0) · токены входа 66607, выхода 8221 · утверждений 14 · нарушений 5 · вопросов 4
+Exit 0, 205.6 s

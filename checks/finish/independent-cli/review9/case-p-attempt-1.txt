@@ -1,0 +1,13 @@
+2026-11-27T10:45:01+05:00
+> python -m requirements_validator --input checks/finish/independent/case-p/variant.md --output checks/finish/independent-runs/review9/case-p/report.md
+Документ «Учебный стенд для мозаики» · исходных блоков 6 · SHA-256 2abe7a0c42714262a12f294001c0bb31f689524b5f2fc7c9736bce37021af8c0
+Версия af5d4e1b8758af5da7be6b9dc9e2173300d2f3c7 · рабочая копия чистая
+Доступ подтверждён · OpenAI через Codex CLI · gpt-6.2-sol
+Выделение и оценка утверждений: пакет 1, блоков 6.
+Сквозная проверка всего документа: утверждений 24.
+Независимая проверка оснований и вопросов по всему источнику: замечаний 3.
+Проверка черновика: /decisions/1/question_mode, /decisions/1/question, /decisions/1/test, /decisions/1/action (Z-002): В карточке требуется открытый вопрос. Верни question_mode=сохранить, если исходные вопрос и тест верны, либо выбери заменить и заполни question и test. Если текст уже даёт ответ и замечание не обосновано, выбери action=снять и question_mode=убрать. Запрошена одна точечная правка.
+Отчёт сохранён в ./checks/finish/independent-runs/review9/case-p/report.md
+Метрики сохранены в ./checks/finish/independent-runs/review9/case-p/report/run-meta.json
+Готово за 223.8 с, включая запись · запросов модели 5 (повторных 1) · токены входа 88161, выхода 8254 · утверждений 24 · нарушений 3 · вопросов 3
+Exit 0, 224.0 s
