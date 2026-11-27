@@ -1104,14 +1104,24 @@ def _proofread_questions(provider, matrix, raw, reviewed, candidates, audit_payl
         proof_payload["current_decisions"] = [d for d in raw["decisions"] if d["id"] in reopen_ids]
         proof_payload["claim_quotes"] = {c["id"]: c["quote"] for c in audit_payload["claims"]}
         proof_payload["previous_summary"] = {k: v for k, v in raw.items() if k != "decisions"}
-        proof_schema = HANDOFF_EDITS
+        proof_schema = deepcopy(HANDOFF_EDITS)
+        fields = proof_schema["properties"]["dispositions"]["items"]["properties"]
+        # Keep smaller generation schemas for long specifications. The same
+        # complete ID catalogues are always checked after a response arrives.
+        catalogues = {"key": sorted(transitioned_keys), "owner": ["", *(f["id"] for f in candidates)],
+                      "source_id": ["", *proof_payload["claim_quotes"]]}
+        for name, choices in catalogues.items():
+            if len(choices) <= 128:
+                fields[name] = enum(*choices)
         proof_instruction += (
             "\n" + coverage_handoff.INSTRUCTION +
             "\nЕсли ранее снятое или объединённое решение необходимо для приёмки и ни один итоговый "
             "вопрос не может его покрыть без смешения разных решений, восстанови исходный кандидат: "
             "в reopened верни полноценный DECISION с прежним ID, обоснованием и вопросом. "
             "Тогда обнови общую оценку, готовность и приоритеты (одна запись summary). Иначе reopened "
-            "и summary пусты. Соблюдай договор полей исходной рецензии. Каждую проверку закрывает "
+                "и summary пусты. Для каждой квитанции лучше копировать всю итоговую формулировку вопроса "
+                "и короткое законченное предложение из итогового теста. При правке цитируй новую редакцию. "
+                "Соблюдай договор полей исходной рецензии. Каждую проверку закрывает "
             "реально публикуемая пара вопроса и теста либо дословная опора в ТЗ."
         )
     def verify_words(data):

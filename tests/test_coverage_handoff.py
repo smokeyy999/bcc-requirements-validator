@@ -115,6 +115,29 @@ class CoverageHandoffTests(unittest.TestCase):
             with self.subTest(dispositions=dispositions), self.assertRaises(ValueError):
                 verify(handoffs, dispositions, [public], {}, raw)
 
+    def test_single_repair_message_names_both_receipts_and_every_invalid_quote(self):
+        raw = dict(decisions=[decision(action="снять", mode="убрать", owner="Z-2"), decision("Z-2"),
+                              decision("Z-3", action="снять", mode="убрать")])
+        public = group("Z-2")
+        kept = [dict(id="Z-2", question=public["question"])]
+        order = dict(matrix("order", "Z-3"), decision="Порядок заявок", known="Очередь заявок",
+                     question="Как сортируются заявки?", test="Добавить две заявки и проверить порядок.",
+                     distinction="У заявок разные даты", outcomes=["Сначала ранняя", "Сначала поздняя"])
+        rows = build([matrix(), order], raw, kept, [public])
+        source = {"R-8": "Очередь заявок сортируется по дате создания."}
+        covered = disposition(owner="Z-2")
+        closed = dict(key="order", status="закрыто", owner="", question_quote="", test_quote="",
+                      source_id="R-8", source_quote="сортируется по дате создания",
+                      reason="Порядок заявок определяет дата создания.")
+        verify(rows, [covered, closed], [public], source, raw)
+        with self.assertRaises(ValueError) as caught:
+            verify(rows, [dict(covered, question_quote="чужой вопрос", test_quote="чужой тест"),
+                          dict(closed, source_quote="сортируется по номеру", reason="задано")], [public], source, raw)
+        message = str(caught.exception)
+        for field in ("(key=language).question_quote:", "(key=language).test_quote:",
+                      "(key=order).source_quote:", "(key=order).reason:"):
+            self.assertIn(field, message)
+
 
 if __name__ == "__main__":
     unittest.main()

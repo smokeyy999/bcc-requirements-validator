@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import unittest
 
 from requirements_validator import engine
-from requirements_validator.coverage_review import _reconcile, supplement
+from requirements_validator.coverage_review import _id_type, _reconcile, supplement
 
 
 def block(i, text):
@@ -71,6 +71,35 @@ class CoverageReviewTests(unittest.TestCase):
         candidates, matrix = self.run_matrix([self.row("settled", "задано", "", "RB2")], [])
         self.assertEqual(candidates, [self.prior])
         self.assertEqual(matrix[0]["finding_id"], "")
+        _, contextual = self.run_matrix([self.row("settled", "задано", "Z-008", "RB2")], [])
+        self.assertEqual(contextual[0]["finding_id"], "")
+
+    def test_all_bad_links_and_their_exact_repair_paths_are_reported_at_once(self):
+        rows = [self.row("settled", "задано", "R-misplaced", "RB1", "RB-missing"),
+                self.row("same", "уже проверено", "", "RB3"),
+                self.row("open", "новое решение", "", "RB2"),
+                self.row("empty", "задано", "")]
+        change = self.change("open", 2, "Как проверить содержание?")
+        change["evidence"] = [dict(id="never", quote="Существующее значение"),
+                              dict(id="RB1", quote=self.parts[0].text),
+                              dict(id="RB2", quote="Отсутствующая цитата")]
+        with self.assertRaises(engine.DraftError) as raised:
+            self.run_matrix(rows, [change])
+        actual = raised.exception
+        self.assertEqual(set(actual.paths), {
+            "/matrix/0/owner", "/matrix/0/checked/1", "/matrix/1/owner", "/matrix/3/checked/-",
+            "/changes/0/evidence/0/id", "/changes/0/evidence/0/quote", "/matrix/2/checked/-",
+            "/changes/0/evidence/1/id", "/changes/0/evidence/1/quote", "/changes/0/evidence/2/quote"})
+        for missing in ("R-misplaced", "RB-missing", "never"):
+            self.assertIn(missing, str(actual))
+        self.assertIn("оставь поле пустым", str(actual))
+        self.assertIn("для этого статуса нужен владелец", str(actual))
+
+    def test_wire_enums_are_bounded_by_count_and_encoded_bytes(self):
+        ids = [f"R-{n}" for n in range(250)]
+        self.assertEqual(_id_type(engine, ids, 160, 3072), engine.STR)
+        self.assertEqual(_id_type(engine, ["ю" * 1800], 160, 3072), engine.STR)
+        self.assertEqual(_id_type(engine, ["", "Z-001"], 80, 2048)["enum"], ["", "Z-001"])
 
     def test_unknown_owner_false_quote_or_missing_observable_alternative_is_rejected(self):
         row = self.row("gap","новое решение","","RB3")
@@ -99,6 +128,11 @@ class CoverageReviewTests(unittest.TestCase):
             def ask(self, prompt, schema):
                 data = json.loads(prompt.split("Вход (JSON):\n", 1)[1])
                 calls.append(data)
+                properties = schema["properties"]["matrix"]["items"]["properties"]
+                assert properties["owner"]["enum"] == [""]
+                assert properties["checked"]["items"]["enum"] == [c["id"] for c in claims]
+                evidence = schema["properties"]["changes"]["items"]["properties"]["evidence"]["items"]["properties"]
+                assert evidence["id"] == properties["checked"]["items"]
                 return dict(matrix=[dict(key=str(i), axis=axis, checked=[ids[0]], decision="Чтение записи.",
                                          status="задано", owner="", known="При отсутствии выдаётся пустой ответ.",
                                          distinction="") for i,(axis,ids) in enumerate(data["axes"].items())],
@@ -108,3 +142,32 @@ class CoverageReviewTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual({r["axis"] for r in matrix}, calls[0]["axes"].keys())
         self.assertEqual(len(calls[0]["claims"]), 50)
+
+    def test_provider_returning_two_invalid_rows_receives_one_complete_scoped_patch(self):
+        parts = [block(i, f"Экран читает запись {i} раз в сутки. До первой записи возвращается пустой ответ.")
+                 for i in range(1, 51)]
+        blocks = {b.id: b for b in parts}
+        claims = [dict(id="R" + b.id, block=b.id, quote=b.text, summary=b.text) for b in parts]
+        calls = []
+        expected = {"/matrix/0/owner", "/matrix/1/checked/0"}
+        class Repairs:
+            def ask(inner, prompt, schema):
+                data = json.loads(prompt.split("Вход (JSON):\n", 1)[1])
+                calls.append(schema)
+                if schema is engine.PATCH:
+                    self.assertEqual(set(data["allowed_paths"]), expected)
+                    self.assertIn("R-wrong", data["errors"])
+                    self.assertIn("Z-wrong", data["errors"])
+                    return dict(changes=[dict(op="replace", path="/matrix/0/owner", value=""),
+                                         dict(op="replace", path="/matrix/1/checked/0", value=claims[0]["id"])])
+                props = schema["properties"]["matrix"]["items"]["properties"]
+                self.assertEqual(props["owner"]["enum"], ["", self.prior["id"]])
+                rows = [dict(self.row(str(i), "задано", "", ids[0]), axis=axis)
+                        for i, (axis, ids) in enumerate(data["axes"].items())]
+                rows[0]["owner"], rows[1]["checked"] = "Z-wrong", ["R-wrong"]
+                return dict(matrix=rows, changes=[])
+        candidates, matrix = supplement(Repairs(), claims, blocks, [self.prior], {}, "", lambda _: None)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(candidates, [self.prior])
+        self.assertEqual(matrix[0]["owner"], "")
+        self.assertEqual(matrix[1]["checked"], [claims[0]["id"]])

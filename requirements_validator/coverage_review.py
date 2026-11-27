@@ -50,6 +50,9 @@ _COVERAGE = COMMON + """
 считает покрытыми. Не выпускай несколько карточек по одному открытому решению: одинаковый тест и одно решение автора
 достаточно отметить как «уже проверено» с существующим ID. При полном ответе из ТЗ поставь «задано» и
 укажи опорные ID с фактом в known. При отсутствии независимого требования укажи это в известном факте.
+В checked и evidence.id копируй только id записей claims этой проверки. В owner укажи только id
+из candidates этой проверки. Для «задано» оставь owner пустым, если ссылка на существующую карточку
+не нужна. Для «уже проверено» и «дополнить» нужен владелец.
 Если открыто ровно одно решение, а предыдущий вопрос по нему проверяет не все описанные состояния
 или поля, поставь «дополнить», укажи owner, а в дополнении сформулируй ТОЛЬКО отсутствующую часть
 вопроса и теста. Первоначальная формулировка будет сохранена. Если после всех ответов на существующие
@@ -72,6 +75,24 @@ def _active_axes(blocks, claims):
     return result
 
 
+def _id_type(e, values, max_values, max_bytes):
+    # The claim dictionary occurs twice in the wire schema. Budget both copies
+    # and the owner dictionary independently; always retain the source lookup.
+    if len(values) > max_values or len(e.compact(values).encode("utf-8")) > max_bytes:
+        return e.STR
+    return e.enum(*values) if values else e.STR
+
+
+def _schema(e, axes, claim_id, owner):
+    return e.obj(
+        matrix=e.array(e.obj(key=e.STR, axis=e.enum(*axes), checked=e.array(claim_id), decision=e.STR,
+                             status=e.enum("задано", "уже проверено", "дополнить", "новое решение"),
+                             owner=owner, known=e.STR, distinction=e.STR)),
+        changes=e.array(e.obj(key=e.STR, topic=e.STR, category=e.enum("Полнота", "Трассируемость", "Проверяемость", "Ясность"),
+                              severity=e.enum("Существенная", "Низкая"), evidence=e.array(e.obj(id=claim_id, quote=e.STR)),
+                              question=e.STR, test=e.STR, outcomes=e.array(e.STR))))
+
+
 def supplement(provider, claims, blocks, candidates, references, instructions, progress):
     from . import engine as e
 
@@ -84,13 +105,16 @@ def supplement(provider, claims, blocks, candidates, references, instructions, p
     axes = _active_axes(blocks, claims)
     if len(axes) < 2:
         return candidates, []
-    schema = e.obj(
-        matrix=e.array(e.obj(key=e.STR, axis=e.enum(*axes), checked=e.array(e.STR), decision=e.STR,
-                             status=e.enum("задано", "уже проверено", "дополнить", "новое решение"),
-                             owner=e.STR, known=e.STR, distinction=e.STR)),
-        changes=e.array(e.obj(key=e.STR, topic=e.STR, category=e.enum("Полнота", "Трассируемость", "Проверяемость", "Ясность"),
-                              severity=e.enum("Существенная", "Низкая"), evidence=e.array(e.obj(id=e.STR, quote=e.STR)),
-                              question=e.STR, test=e.STR, outcomes=e.array(e.STR))))
+    schema = _schema(e, axes, e.STR, e.STR)
+    constrained = _schema(e, axes, _id_type(e, [c["id"] for c in claims], 160, 3072),
+                          _id_type(e, ["", *(f["id"] for f in candidates)], 80, 2048))
+
+    class CoverageProvider:
+        def ask(self, prompt, requested):
+            # Enforce the wire enums when generating the full matrix. Locally a
+            # well-shaped draft can repair every bad ID in one PATCH, even from
+            # a provider that did not enforce its output schema.
+            return provider.ask(prompt, constrained if requested is schema else requested)
     payload = dict(blocks=[e._source(b) for b in blocks.values()],
                    claims=[{k: c[k] for k in ("id", "block", "quote", "summary")} for c in claims],
                    axes=axes, candidates=[e._audit_candidate(f) for f in candidates])
@@ -106,8 +130,58 @@ def supplement(provider, claims, blocks, candidates, references, instructions, p
         )
     stage("coverage_review")
     progress("Независимая сверка решений между разделами и проверенными кандидатами.")
-    return e._request(provider, _COVERAGE + instructions, payload, schema,
+    return e._request(CoverageProvider(), _COVERAGE + instructions, payload, schema,
                       lambda raw: _reconcile(raw, axes, candidates, claims, blocks, references), progress)
+
+
+def _check_ids(e, raw, rows, by_id, existing, blocks):
+    errors, paths = [], []
+
+    def issue(path, message, *related):
+        errors.append(f"{path}: {message}")
+        paths.extend((path, *related))
+
+    for i, row in enumerate(raw["matrix"]):
+        prefix = f"/matrix/{i}"
+        owner = row["owner"]
+        if owner and owner not in existing:
+            correction = ("укажи ID существующего владельца" if row["status"] in {"уже проверено", "дополнить"}
+                          else "укажи существующий ID карточки или оставь поле пустым")
+            issue(prefix + "/owner", f"{row['key']}: среди candidates нет {owner!r}; {correction}")
+        elif not owner and row["status"] in {"уже проверено", "дополнить"}:
+            issue(prefix + "/owner", f"{row['key']}: для этого статуса нужен владелец из candidates")
+        elif row["status"] == "дополнить" and (existing[owner].get("missing_target") or not existing[owner]["question"]):
+            issue(prefix + "/owner", f"{row['key']}: для дополнения нужна карточка с открытым вопросом")
+        if not row["checked"]:
+            issue(prefix + "/checked/-", f"{row['key']}: добавь проверенное утверждение из claims")
+        for j, ident in enumerate(row["checked"]):
+            if ident not in by_id:
+                issue(f"{prefix}/checked/{j}", f"{row['key']}: {ident!r} отсутствует в claims; замени или удали ID, сохрани хотя бы одну опору")
+
+    for i, change in enumerate(raw["changes"]):
+        key = change["key"]
+        row_info = rows.get(key)
+        if not change["evidence"]:
+            issue(f"/changes/{i}/evidence/-", f"{key}: добавь дословную опору из checked")
+        for j, item in enumerate(change["evidence"]):
+            prefix = f"/changes/{i}/evidence/{j}"
+            ident = item["id"]
+            if ident not in by_id:
+                issue(prefix + "/id", f"{key}: {ident!r} отсутствует в claims; выбери реальную опору из checked и сверь цитату",
+                      prefix + "/quote")
+                continue
+            if row_info and ident not in row_info[1]["checked"]:
+                issue(prefix + "/id", f"{key}: {ident!r} не включён в checked этой строки; проверь и добавь его или выбери другую опору",
+                      f"/matrix/{row_info[0]}/checked/-", prefix + "/quote")
+            if not item["quote"].strip():
+                issue(prefix + "/quote", f"{key}: нужна дословная непустая цитата")
+            else:
+                try:
+                    e._evidence(item, by_id, blocks)
+                except ValueError as error:
+                    issue(prefix + "/quote", f"{key}: {error}")
+    if errors:
+        raise e.DraftError("\n".join(errors), paths)
 
 
 def _reconcile(raw, axes, candidates, claims, blocks, references):
@@ -115,6 +189,7 @@ def _reconcile(raw, axes, candidates, claims, blocks, references):
 
     by_id = {c["id"]: c for c in claims}
     existing = {f["id"]: f for f in candidates}
+    _check_ids(e, raw, {row["key"]: (i, row) for i, row in enumerate(raw["matrix"])}, by_id, existing, blocks)
     changes = {c["key"]: c for c in raw["changes"]}
     rows = {r["key"]: r for r in raw["matrix"]}
     required = {key for key, row in rows.items() if row["status"] in {"новое решение", "дополнить"}}
@@ -127,11 +202,7 @@ def _reconcile(raw, axes, candidates, claims, blocks, references):
     result_matrix = []
     for key, row in rows.items():
         e._nonempty(row, "decision", "known")
-        checked, owner, status = set(row["checked"]), row["owner"], row["status"]
-        if not checked or not checked <= by_id.keys() or (owner and owner not in existing):
-            raise ValueError(f"{key}: нужны реальные ID утверждений и существующий owner либо пустая строка")
-        if status in {"уже проверено", "дополнить"} and not owner:
-            raise ValueError(f"{key}: укажи существующую карточку, которая проверяет это решение")
+        owner, status = row["owner"], row["status"]
         result_row = dict(row, finding_id=owner if status == "уже проверено" else "")
         result_matrix.append(result_row)
         if key not in required:
@@ -142,8 +213,6 @@ def _reconcile(raw, axes, candidates, claims, blocks, references):
         outcomes = [text_key(item) for item in change["outcomes"]]
         if len(outcomes) != 2 or not all(outcomes) or len(set(outcomes)) != 2:
             raise ValueError(f"{key}: для одного испытания нужны два разных наблюдаемых исхода")
-        if not change["evidence"] or any(item["id"] not in checked or not item["quote"].strip() for item in change["evidence"]):
-            raise ValueError(f"{key}: докажи открытое решение непустыми дословными фрагментами из checked")
         entry = dict(kind="Предполагаемый пробел", category=change["category"], topic=change["topic"],
                      evidence=change["evidence"], severity=change["severity"], scenario=change["test"],
                      consequence=" / ".join(change["outcomes"]), reason=row["known"] + " " + row["distinction"],
@@ -158,8 +227,6 @@ def _reconcile(raw, axes, candidates, claims, blocks, references):
             continue
         if status == "дополнить":
             prior = existing[owner]
-            if prior.get("missing_target") or not prior["question"]:
-                raise ValueError(f"{key}: дополнить можно существующий открытый вопрос. Проверь самостоятельность другого решения.")
             existing[owner] = dict(prior, ids=sorted(set(prior["ids"]) | set(finding["ids"])),
                                    evidence=prior["evidence"] + [ev for ev in finding["evidence"] if ev not in prior["evidence"]],
                                    question=prior["question"] + " " + finding["question"],

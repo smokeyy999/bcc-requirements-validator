@@ -69,5 +69,6 @@ class QuestionProofTests(unittest.TestCase):
         result = engine._proofread_questions(provider, matrix, raw, reviewed, [], audit,
                                              lambda decision: reviewed, lambda msg: None)
         self.assertEqual(result, reviewed)
-        self.assertIs(provider.schema, engine.HANDOFF_EDITS)
+        keys = provider.schema["properties"]["dispositions"]["items"]["properties"]["key"]
+        self.assertEqual(keys["enum"], ["first"])
         self.assertEqual(matrix[0]["final_check"]["source_id"], "R-1")

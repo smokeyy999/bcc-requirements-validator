@@ -99,53 +99,73 @@ def _concepts(text):
     return {word[:5] if len(word) > 5 and re.fullmatch(r"[а-я]+", word) else word for word in _terms(text)}
 
 
-def _excerpt(value, text, label, key):
+def _valid_excerpt(value, text):
     # Short identifiers may be meaningful in prose, but one isolated word or a
     # verdict such as "задано" cannot establish a condition or an observation.
-    if not value.strip() or value != value.strip() or value not in text or len(_terms(value)) < 2:
-        raise ValueError(f"{key}: в {label} нужна содержательная дословная выдержка из целевого текста")
+    return bool(value.strip() and value == value.strip() and len(_terms(value)) >= 2
+                and (text is None or value in text))
+
+
+def _receipt_errors(row, item, decisions, groups, source_quotes):
+    previous = row["previous"]
+    subject = " ".join((row["decision"], row["known"], row["distinction"], previous["question"],
+                        previous["test"], *previous["outcomes"]))
+    concepts = _concepts(subject)
+    if item["status"] == "покрыто":
+        origin = row["finding_id"]
+        # A group can cover a removed question even when the original decision did
+        # not record a duplicate. Always check against the actual published queue.
+        expected_owner = decisions.get(origin, {}).get("same_decision_as") or (origin if origin in groups else "")
+        owner = item["owner"]
+        if owner not in groups or expected_owner and owner != expected_owner:
+            yield "owner: укажи сохранившийся прямой ID общего вопроса для " + origin
+        published = groups.get(expected_owner or owner, {})
+        for field in ("source_id", "source_quote"):
+            if item[field]:
+                yield f"{field}: для открытого решения оставь поле пустым"
+        for field in ("question", "test"):
+            if not _valid_excerpt(item[field + "_quote"], published.get(field)):
+                yield f"{field}_quote: нужна содержательная дословная выдержка из опубликованного текста"
+        witness = item["question_quote"] + " " + item["test_quote"]
+        if concepts and not concepts.intersection(_concepts(witness)):
+            yield "question_quote/test_quote: выбери выдержки, в которых виден предмет проверяемого решения"
+    elif item["status"] == "закрыто":
+        for field in ("owner", "question_quote", "test_quote"):
+            if item[field]:
+                yield f"{field}: для закрытого решения оставь поле пустым"
+        source = source_quotes.get(item["source_id"])
+        if source is None:
+            yield "source_id: укажи существующий ID утверждения"
+        if not _valid_excerpt(item["source_quote"], source):
+            yield "source_quote: нужна содержательная дословная выдержка из утверждения"
+        reason = item["reason"].strip()
+        explanation = _concepts(reason)
+        if (len(explanation) < 2 or text_key(reason) == text_key(item["source_quote"])
+                or not explanation.intersection(concepts)
+                or not explanation.intersection(_concepts(item["source_quote"]))):
+            yield "reason: объясни, как фрагмент отвечает на конкретное решение или опровергает его основу"
+    else:
+        yield "status: ожидается статус «покрыто» или «закрыто»"
 
 
 def verify(handoffs, dispositions, refreshed_groups, source_quotes, raw_final):
     """Validate witnesses against the actual public group after the normal decision checks."""
     expected = {row["key"]: row for row in handoffs}
-    received = {item["key"]: item for item in dispositions}
-    if len(received) != len(dispositions) or received.keys() != expected.keys():
-        raise ValueError("dispositions: нужен один вердикт по каждому переданному key без чужих или повторных строк")
     decisions = {d["id"]: d for d in raw_final["decisions"]}
     groups = _groups(refreshed_groups, decisions)
-    for key, row in expected.items():
-        item = received[key]
-        previous = row["previous"]
-        subject = " ".join((row["decision"], row["known"], row["distinction"], previous["question"],
-                            previous["test"], *previous["outcomes"]))
-        concepts = _concepts(subject)
-        if item["status"] == "покрыто":
-            origin = row["finding_id"]
-            decision = decisions.get(origin, {})
-            # A removed question may already be answered by a surviving group even
-            # if adjudication did not record the duplicate. Resolve it explicitly
-            # here using the real public text, without adding a question.
-            expected_owner = decision.get("same_decision_as") or (origin if origin in groups else "")
-            owner = item["owner"]
-            if owner not in groups or expected_owner and owner != expected_owner:
-                raise ValueError(f"{key}: укажи сохранившийся прямой ID общего вопроса для {origin}")
-            if item["source_id"] or item["source_quote"]:
-                raise ValueError(f"{key}: открытое решение должно иметь выдержки из опубликованной группы")
-            for field in ("question", "test"):
-                _excerpt(item[field + "_quote"], groups[owner][field], field + "_quote", key)
-            witness = item["question_quote"] + " " + item["test_quote"]
-            if concepts and not concepts.intersection(_concepts(witness)):
-                raise ValueError(f"{key}: выбери выдержки, в которых виден предмет проверяемого решения")
-        elif item["status"] == "закрыто":
-            if item["owner"] or item["question_quote"] or item["test_quote"] or item["source_id"] not in source_quotes:
-                raise ValueError(f"{key}: для закрытия укажи существующий ID источника и очисти ссылки на вопрос")
-            _excerpt(item["source_quote"], source_quotes[item["source_id"]], "source_quote", key)
-            reason = item["reason"].strip()
-            explanation = _concepts(reason)
-            if (len(explanation) < 2 or text_key(reason) == text_key(item["source_quote"])
-                    or not explanation.intersection(concepts)
-                    or not explanation.intersection(_concepts(item["source_quote"]))):
-                raise ValueError(f"{key}: объясни, как фрагмент отвечает на конкретное решение или опровергает его основу")
+    seen = set()
+    errors = []
+    for index, item in enumerate(dispositions):
+        key = item["key"]
+        path = f"dispositions[{index}] (key={key})"
+        if key in seen:
+            errors.append(f"{path}.key: повторная строка")
+        seen.add(key)
+        if key not in expected:
+            errors.append(f"{path}.key: этот ключ не передан на сверку")
         else:
-            raise ValueError(f"{key}: ожидается статус «покрыто» или «закрыто»")
+            errors.extend(f"{path}.{message}"
+                          for message in _receipt_errors(expected[key], item, decisions, groups, source_quotes))
+    errors.extend(f"dispositions (key={key}).key: нужна строка для этого решения" for key in expected if key not in seen)
+    if errors:
+        raise ValueError("\n".join(errors))
